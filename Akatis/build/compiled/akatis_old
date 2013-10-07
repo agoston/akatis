@@ -1,0 +1,1234 @@
+import javax.microedition.lcdui.*;
+import javax.microedition.midlet.*;
+import java.util.*;
+import java.io.*;
+
+//atirni ugy, hogy a MyCanvas csinaljon mindent,amit csak lehet, a midlet semmit, vagy megse?
+
+class MyCanvas extends Canvas {
+	private Akatis midlet;
+
+	public MyCanvas(Akatis midlet) {
+		this.midlet = midlet;
+	}
+
+	public void paint(Graphics g) {
+		midlet.paint(g);
+	}
+	public void keyPressed(int keyCode) {
+		midlet.keyPressed(keyCode);
+	}
+	public void keyReleased(int keyCode) {
+		midlet.keyReleased(keyCode);
+	}
+}
+
+class Bullet {
+	Akatis g;
+	int x, y, dx, dy;
+	int lastDx, lastDy;
+	int hit;
+	int type;
+	int frame;
+	private Image image;
+	boolean fromPlayer;
+	static final int type2nFrames[] = { 1, 3, 2, 2, 3, 3, 3, 3, 3, 3, 3, 1, 1, 1 };
+
+	public Bullet(Akatis g, boolean fromPlayer, int x, int y, int dx, int dy, int hit, int type) {
+		image = g.bulletImages[type];
+
+		this.g = g;
+		this.fromPlayer = fromPlayer;
+		this.dx = dx;
+		this.dy = dy;
+		this.hit = hit;
+		this.type = type;
+		this.x = x - (width()<<7);
+		this.y = y - (height()<<7);
+	}
+
+	public void paint(Graphics gr) {
+		int w = width();
+		gr.clipRect(g.pleft+(x>>8), g.ptop+(y>>8), w, height());
+		gr.drawImage(image, g.pleft+(x>>8)-w*frame, g.ptop+(y>>8), Graphics.TOP|Graphics.LEFT);
+	}
+
+	int width() {
+		return image.getWidth()/type2nFrames[type];
+	}
+	int height() {
+		return image.getHeight();
+	}
+
+	public boolean tick() {
+		frame++;
+		if (frame>=type2nFrames[type]) frame=0;
+		if (dx==0&&dy==0) {
+			Enemy target = g.nearestEnemyTo(g.pleft+(x>>8), g.ptop+(y>>8));
+			if (target!=null) {
+				int DX = target.centerX() - (g.pleft+(x>>8));
+				int DY = target.centerY() - (g.ptop+(y>>8));
+				int l = Akatis.sqrt((DX*DX+DY*DY)<<8);
+				if (l>0) {
+					lastDx = (DX<<8)/l;
+					lastDy = (DY<<8)/l;
+				}
+			}
+			x += 100*lastDx;
+			y += 100*lastDy;
+		} else {
+			x += dx;
+			y += dy;
+		}
+		if (x>>8>=g.pwidth||x>>8<-image.getWidth()||y>>8>=g.pheight||y>>8<-image.getHeight()) {
+			return true;
+		}
+		return false;
+	}
+};
+
+class Enemy {
+	private Akatis g;
+	private int type;
+	private byte[] path;
+	private int dx, dy;
+	private int sourceX, sourceY;
+	private int targetX, targetY;
+	private int x, y;
+	private int pathPosition;
+	private int subPathPosition;
+	private int subPathLength;
+	private Image image;
+	private int shotTicks;
+	int hp;
+	int explosionFrame;
+	static final int type2Hp[] = { 20, 10, 30, 20 };
+	static final int type2Explosion[] = { 0, 1, 0, 2 };
+	boolean wasHit;
+
+	public Enemy(Akatis g, int type, byte[] path, int dx, int dy) {
+		this.g = g;
+		this.type = type;
+		this.path = path;
+		this.dx = dx;
+		this.dy = dy;
+
+		image = g.enemyImages[type];
+
+		if (path!=null) {
+			pathPosition = 2;
+			targetX = path[0]+64;
+			targetY = path[1]+64;
+			advance();
+		} else {
+			pathPosition = -image.getHeight()*2/5-1;
+			x = dx;
+			y = (pathPosition*5)>>1;
+			dx = dy = 0;
+		}
+		hp = type2Hp[type];
+	}
+
+	public boolean advance() {
+		sourceX = targetX;
+		sourceY = targetY;
+		if (pathPosition<path.length) {
+			switch (path[pathPosition++]) {
+				case 0:
+					targetX = path[pathPosition++]+64;
+					targetY = path[pathPosition++]+64;
+					break;
+				case 1:
+					targetX -= 8;
+					targetY += 8;
+					break;
+				case 2:
+					targetY += 8;
+					break;
+				case 3:
+					targetX += 8;
+					targetY += 8;
+					break;
+				case 4:
+					targetX += 8;
+					break;
+				case 5:
+					targetX += 8;
+					targetY -= 8;
+					break;
+				case 6:
+					targetY -= 8;
+					break;
+				case 7:
+					targetX -= 8;
+					targetY -= 8;
+					break;
+				case 8:
+					targetX -= 8;
+					break;
+			}
+		} else {
+			if (targetX>=g.pwidth||targetX<-image.getWidth()||targetY>=g.pheight||targetY<-image.getHeight()) {	// ha nem latszik a kepernyon
+				return true;
+			}
+			// ujrakezdi a path-t
+			targetX = path[0]+64;
+			targetY = path[1]+64;
+			pathPosition = 2;
+		}
+		subPathPosition = 0;
+		int dx = targetX-sourceX;
+		int dy = targetY-sourceY;
+		subPathLength = Akatis.sqrt((dx*dx+dy*dy)<<8);
+		x = sourceX;
+		y = sourceY;
+		return false;
+	}
+
+	public int centerX() {
+		return g.pleft+x+dx+image.getWidth()/4;
+	}
+	public int centerY() {
+		return g.ptop+y+dy+image.getHeight()/2;
+	}
+
+	public void paint(Graphics gr) {
+		boolean drawShip = true;
+		if (hp<=0&&explosionFrame>=0) drawShip=false;
+		if (drawShip) {
+			gr.clipRect(g.pleft+x+dx, g.ptop+y+dy, image.getWidth()>>1, image.getHeight());
+			gr.drawImage(image, g.pleft+x+dx-(wasHit?image.getWidth()>>1:0), g.ptop+y+dy, Graphics.TOP|Graphics.LEFT);
+			wasHit=false;
+		}
+		if (hp<=0) {
+			Image explosionImage = g.explosionImages[type2Explosion[type]];
+
+			int s = explosionImage.getHeight();
+			int rx = dx - s/2+image.getWidth()/4;
+			int ry = dy - s/2+image.getHeight()/2;
+
+			gr.clipRect(g.pleft+x+rx, g.ptop+y+ry, s, s);
+			int dx = explosionFrame*s;
+			int dy = 0;
+			gr.drawImage(explosionImage, g.pleft+x-dx+rx, g.ptop+y-dy+ry, Graphics.TOP|Graphics.LEFT);
+		}
+
+	}
+
+	public boolean collide(int x, int y, int width, int height) {
+		if (hp<=0) return false;
+		if (x+width<this.x+this.dx) return false;
+		if (y+height<this.y+this.dy) return false;
+		if (x>=this.x+this.dx+(image.getWidth()>>1)) return false;
+		if (y>=this.y+this.dy+image.getHeight()) return false;
+		return true;
+	}
+
+	void hit(int p) {
+		hp -= p;
+		wasHit = true;
+	}
+
+	public boolean tick() {
+		if (hp>0) {
+			subPathPosition += 50;
+			if (path!=null) {
+				if (subPathPosition>=subPathLength) {
+					x = targetX;
+					y = targetY;
+					return advance();
+				} else {
+					x = (sourceX*(subPathLength-subPathPosition)+targetX*subPathPosition)/subPathLength;
+					y = (sourceY*(subPathLength-subPathPosition)+targetY*subPathPosition)/subPathLength;
+				}
+			} else {
+				pathPosition++;
+				y = (pathPosition*5)>>1;
+				if (y>g.pheight) return true;
+			}
+			shotTicks++;
+
+			if (shotTicks>10&&type!=1) {
+				shotTicks = 0;
+				g.createBullet(false, (x+dx+image.getWidth()/2)<<8, (y+dy+image.getHeight())<<8, 0, 6<<8, 10, 0);
+			}
+		} else {
+			explosionFrame++;
+			if (explosionFrame==6) return true;
+		}
+
+		return false;
+	}
+}
+
+public class Akatis extends MIDlet implements Runnable, CommandListener {
+	static final int nLevels = 4;
+
+	MyCanvas canvas;
+	//Image bb;
+	//Graphics bbg;
+	int ptop, pleft;
+	int pwidth, pheight;
+
+	Image leftWindowImage;
+	Image uctImage;
+	Image rtnImage;
+	Image guiBottomImage;
+	Image guiFb;
+	Image menuBackgroundImage;
+	Image[] activeMenuImages;
+	Image[] inactiveMenuImages;
+	Image livesIconImage;
+	Image weaponBgImage;
+	int[] nMenuPoints;
+
+	Image playerImage;
+	Image[] backgroundImages;
+	Image[] enemyImages;
+	Image[] extraGunImages;
+	//Image bulletImage;
+	Image[] bulletImages;
+	Image[] explosionImages;
+	Image numberImage;
+	Image hpImage;
+	byte[][] background;
+	byte[][] paths;
+	byte[] enemyDesc;
+
+	int[] numberOffsets = { 0, 7, 14, 20, 27, 34, 41, 48, 55, 62, 68 };
+
+	int currentLevel;
+
+	int score;
+	int lastHpPainted;
+	int state;
+	int currentMenu;
+	int currentSelectedMenuItem;
+	int leftRedonyPosition;
+	int rightRedonyPosition;
+	int leftRedonyDelta;
+	int rightRedonyDelta;
+	boolean leftClosed;
+	boolean rightClosed;
+	int leftBackground;
+
+	int ticks;
+	int backgroundPosition;
+	int currentEnemyDesc;
+	int playerLives;
+	int playerHp;
+	int playerX, playerY;
+	int playerType;
+	int playerFrontGun;
+	int playerFrontGunLevel;
+	int playerBackGun;
+	int playerBackGunLevel;
+	int playerExplosionFrame;
+	int playerExtraOrbitSin;
+	int playerExtraOrbitCos;
+	int playerExtraOrbitX;
+	int playerExtraOrbitY;
+	int playerExtraOrbitDX;
+	int playerExtraOrbitDY;
+	boolean[] keyStatus;
+	int lastShotTick;
+	int lastBackShotTick;
+	boolean fire;
+	int fpsDisplay;
+	boolean needFullRedraw = true;
+
+	Enemy[] enemies;
+	Bullet[] bullets;
+	String message;
+	int messageTicks;
+
+	Image[] LEFTS;
+	Image[] RIGHTS;
+	int BANKAMOUNT;
+
+	long lastTime = -100; // TODO
+	int fps;
+
+	int[] P = new int[9];
+	boolean spec;
+
+	public Akatis() throws java.io.IOException {
+		playerExtraOrbitSin = 0;
+		playerExtraOrbitCos = 0x4000;
+
+		for (int i=0; i<P.length; i++) P[i]=1;
+
+		canvas = new MyCanvas(this);
+		canvas.setCommandListener(this);
+
+		//bb = Image.createImage(128, 140);
+		//bbg = bb.getGraphics();
+		ptop = 0;
+		pleft = 0;
+		pwidth = 128;
+		pheight = 113;
+
+		leftWindowImage = Image.createImage("/leftwindow.png");
+		uctImage = Image.createImage("/uct.png");
+		rtnImage = Image.createImage("/rtn.png");
+		guiBottomImage = Image.createImage("/guibottom.png");
+		guiFb = Image.createImage("/guifb.png");
+		menuBackgroundImage = Image.createImage("/menubg.png");
+
+		activeMenuImages = new Image[6];
+		inactiveMenuImages = new Image[6];
+		nMenuPoints = new int[6];
+		nMenuPoints[0] = 5;
+		nMenuPoints[1] = 4;
+		nMenuPoints[2] = 5;
+		nMenuPoints[3] = 4;
+		nMenuPoints[4] = 5;
+		nMenuPoints[5] = 5;
+
+		for (int j=0; j<activeMenuImages.length; j++) {
+			activeMenuImages[j] = Image.createImage("/ma"+j/10+j%10+".png");
+			inactiveMenuImages[j] = Image.createImage("/mi"+j/10+j%10+".png");
+		}
+		livesIconImage = Image.createImage("/livesicon.png");
+		weaponBgImage = Image.createImage("/weaponbg.png");
+
+		playerImage = Image.createImage("/player2.png");
+
+		enemyImages = new Image[4];
+		for (int i=0; i<4; i++) {
+			enemyImages[i] = Image.createImage("/e"+i/10+i%10+".png");
+		}
+		extraGunImages = new Image[2];
+		extraGunImages[0] = Image.createImage("/extragun0.png");
+		extraGunImages[1] = Image.createImage("/extragun1.png");
+		bulletImages = new Image[14];
+		for (int i=0; i<bulletImages.length; i++) {
+			bulletImages[i] = Image.createImage("/bullet"+i/10+i%10+".png");
+		}
+		explosionImages = new Image[3];
+		explosionImages[0] = Image.createImage("/ex0.png");
+		explosionImages[1] = Image.createImage("/ex1.png");
+		explosionImages[2] = Image.createImage("/ex2.png");
+		numberImage = Image.createImage("/number.png");
+		hpImage = Image.createImage("/hp.png");
+
+		//playerX = 38;
+		//playerY = 72;
+		playerHp = 100;
+		playerFrontGun = 0;
+		playerFrontGunLevel = 0;
+		keyStatus = new boolean[20];
+
+		paths = new byte[16][];
+		for (int i=0; i<paths.length; i++) {
+			java.io.InputStream is = getClass().getResourceAsStream("/p"+i/10+i%10);
+			int len = is.read();
+			len += is.read()<<8;
+			paths[i] = new byte[len];
+			is.read(paths[i]);
+		}
+
+		enemies = new Enemy[16];
+		bullets = new Bullet[64];
+		//enemies[0] = new Enemy(this, 0, paths[0]);
+		rightRedonyPosition = 128;
+
+		LEFTS = new Image[3];
+		LEFTS[0] = Image.createImage("/player2b1.png");
+		LEFTS[1] = Image.createImage("/player2b2.png");
+		LEFTS[2] = Image.createImage("/player2b3.png");
+		RIGHTS = new Image[3];
+		RIGHTS[0] = Image.createImage("/player2j1.png");
+		RIGHTS[1] = Image.createImage("/player2j2.png");
+		RIGHTS[2] = Image.createImage("/player2j3.png");
+		
+		loadLevel(0);
+	}
+
+	//readline implementacio - j2me api grrrr
+	String readLine(InputStream is) throws IOException {
+		byte[] buf = new byte[127];
+		int index = 0;
+		for (buf[index] = (byte)is.read(); buf[index] > 0 && buf[index] != '\n'; buf[++index] = (byte)is.read());
+		return new String(buf, 0, index);
+	}
+	
+	void loadLevel(int levelNum) throws IOException {
+		{
+			Vector v = new Vector(20,10);
+			InputStream is = getClass().getResourceAsStream("/l"+levelNum+"/trl");
+		
+			for (int i = 0; ; i++) {
+				String imageFile = readLine(is);
+				if (imageFile.length() <= 1) break;
+				v.addElement(Image.createImage(imageFile));
+			}
+			backgroundImages = new Image[v.size()];
+			v.copyInto(backgroundImages);
+		}
+		
+		background = new byte[4][];
+		for (int i=0; i<background.length; i++) {
+			InputStream is = getClass().getResourceAsStream("/l"+levelNum+"/bg"+i);
+			int len = is.read();
+			len += is.read()<<8;
+			background[i] = new byte[len];
+			is.read(background[i]);
+		}
+
+		{
+			InputStream is = getClass().getResourceAsStream("/l"+levelNum+"/enemy");
+			int len = is.read();
+			len += is.read()<<8;
+			enemyDesc = new byte[len];
+			is.read(enemyDesc);
+		}
+	}
+
+	int currentMenuToPaint() {
+		int r = currentMenu;
+		if (r==6) r=5;
+		return r;
+	}
+
+	Enemy nearestEnemyTo(int x, int y) {
+		Enemy ret = null;
+		int mdist = 10000000;
+
+		for (int i=0; i<enemies.length; i++) {
+			if (enemies[i]!=null) {
+				int dx = enemies[i].centerX() - x;
+				int dy = enemies[i].centerY() - y;
+				int dist = dx*dx+dy*dy;
+
+				if (dist<mdist) {
+					mdist = dist;
+					ret = enemies[i];
+				}
+			}
+		}
+		return ret;
+	}
+
+	public void paint(Graphics g) {
+		boolean paintPlayfield = false;
+
+		if (needFullRedraw) {
+			g.setColor(0x000000);
+			g.fillRect(0, 0, 128, 160);
+		}
+		//g.setClip(0, 0, 128, 140);
+		//if (P[1]==1) {
+			//g.fillRect(0, 0, 128, 140);
+		//}
+
+		if (leftBackground==1) paintPlayfield = true;
+
+		if (state==0||state==1) {
+			g.drawImage(menuBackgroundImage, 75, 0, Graphics.TOP|Graphics.LEFT);
+			g.setClip(0, 0, 75, 113);
+
+			if (leftBackground==1) {
+				g.drawImage(weaponBgImage, 0, 0, Graphics.TOP|Graphics.LEFT);
+			}
+			if (leftBackground==2) {
+				g.drawImage(playerType<2?uctImage:rtnImage, 0, 0, Graphics.TOP|Graphics.LEFT);
+			}
+		} else {
+			g.setClip(0, 0, 128, 113);
+			paintPlayfield = true;
+		}
+
+		if (paintPlayfield) {
+			int maxBg = 4;
+			if (state==0||state==1) maxBg=0;
+
+			for (int bg=0; bg<maxBg; bg++) {
+				int speed = 3;
+				if (bg==1) speed = 5;
+				if (bg==2) speed = 5;
+				if (bg==3) speed = 9;
+				int pos = (backgroundPosition*speed)>>1;
+				int bgSubPos = pos&0x1f;
+				int bgPos = pos>>5;
+				for (int y=-4; y<=3; y++) {
+					for (int x=0; x<10; x++) {
+						int tile = background[bg][(bgPos+3-y)*10+x]-'A';
+						if (tile>=0&&P[bg]==1) {
+							if (backgroundImages[tile].getHeight()+y*32+bgSubPos>0) {
+								g.drawImage(backgroundImages[tile], x*16-16, y*32+bgSubPos, Graphics.TOP|Graphics.LEFT);
+							}
+						}
+					}
+				}
+			}
+			//g.drawLine(0, 0, 100, 100);
+
+			int cx = g.getClipX();
+			int cy = g.getClipY();
+			int cw = g.getClipWidth();
+			int ch = g.getClipHeight();
+			for (int i=0; i<enemies.length; i++) {
+				if (enemies[i]!=null) {
+					enemies[i].paint(g);
+					g.setClip(cx, cy, cw, ch);
+				}
+			}
+
+			g.drawImage(extraGunImages[0], pleft+playerExtraOrbitX+playerExtraOrbitDX, ptop+playerExtraOrbitY+playerExtraOrbitDY, Graphics.TOP|Graphics.LEFT);
+
+			for (int i=0; i<bullets.length; i++) {
+				if (bullets[i]!=null) {
+					bullets[i].paint(g);
+					g.setClip(cx, cy, cw, ch);
+				}
+			}
+
+
+			if (playerHp>0) {
+				Image p = playerImage;
+				if (BANKAMOUNT<0) {
+					p = LEFTS[-(BANKAMOUNT+1)];
+				}
+				if (BANKAMOUNT>0) {
+					p = RIGHTS[BANKAMOUNT-1];
+				}
+				g.drawImage(p, pleft+playerX, ptop+playerY, Graphics.TOP|Graphics.LEFT);
+			} else {
+				int s = explosionImages[0].getHeight();
+				int rx = - s/2+playerImage.getWidth()/2;
+				int ry = - s/2+playerImage.getHeight()/2;
+
+				g.clipRect(pleft+playerX+rx, ptop+playerY+ry, s, s);
+				int dx = playerExplosionFrame*s;
+				int dy = 0;
+				g.drawImage(explosionImages[0], pleft+playerX-dx+rx, ptop+playerY-dy+ry, Graphics.TOP|Graphics.LEFT);
+			}
+		}
+
+		if (state==10) {
+			{
+				int s = score;
+				int x = 32;
+				for (int i=0; i<4; i++) {
+					int w = numberOffsets[(s%10)+1] - numberOffsets[s%10];
+					x -= w;
+					g.setClip(x, 2, w, 7);
+					g.drawImage(numberImage, x-numberOffsets[s%10], 2, Graphics.TOP|Graphics.LEFT);
+					s /= 10;
+				}
+			}
+			{
+				int s = playerLives;
+				int x = 124;
+				for (int i=0; i<2; i++) {
+					int w = numberOffsets[(s%10)+1] - numberOffsets[s%10];
+					x -= w;
+					g.setClip(x, 2, w, 7);
+					g.drawImage(numberImage, x-numberOffsets[s%10], 2, Graphics.TOP|Graphics.LEFT);
+					s /= 10;
+				}
+			}
+			g.setClip(0, 0, 128, 140);
+			g.drawImage(livesIconImage, 99, 2, Graphics.TOP|Graphics.LEFT);
+
+			if (message!=null) {
+				g.setColor(0xffff00);
+				g.drawString(message, 64, 30, Graphics.TOP|Graphics.HCENTER);
+			}
+		}
+
+		if (playerHp!=lastHpPainted||needFullRedraw) {
+			g.setClip(0, 0, 128, 140);
+			g.drawImage(guiBottomImage, 0, 113, Graphics.TOP|Graphics.LEFT);
+
+			if (needFullRedraw) g.drawImage(guiFb, 0, 128, Graphics.TOP|Graphics.LEFT);
+
+			int hpl = 30*playerHp/100;
+			g.setClip(43-hpl, 0, 48, 140);
+			g.drawImage(hpImage, 13, 118, Graphics.TOP|Graphics.LEFT);
+			lastHpPainted = playerHp;
+		}
+		g.setClip(0, 0, 128, 140);
+
+		g.drawImage(leftWindowImage, leftRedonyPosition, 0, Graphics.TOP|Graphics.LEFT);
+
+		if (state==0||state==1) {
+			g.drawImage(inactiveMenuImages[currentMenuToPaint()], 75, 10, Graphics.TOP|Graphics.LEFT);
+			g.setClip(0, currentSelectedMenuItem*14+10, 128, 14);
+			g.drawImage(activeMenuImages[currentMenuToPaint()], 75, 10, Graphics.TOP|Graphics.LEFT);
+
+			g.setClip(0, 0, 128, 140);
+		}
+
+		g.drawImage(leftWindowImage, rightRedonyPosition, 0, Graphics.TOP|Graphics.LEFT);
+		//if (state==10) {
+			//g.setClip(0, 0, 128, 140);
+			//g.drawImage(guiTopImage, 0, 0, Graphics.TOP|Graphics.LEFT);
+			//g.drawImage(guiBottomImage, 0, 144, Graphics.TOP|Graphics.LEFT);
+		//}
+
+		if (fpsDisplay!=0) {
+			g.setClip(0, 0, canvas.getWidth(), 16);
+			g.setColor(0x00007f);
+			g.fillRect(0, 0, canvas.getWidth(), 16);
+			g.setColor(0x00ff00);
+			String s = " ";
+			if (fpsDisplay==2) {
+				for (int i=0; i<4; i++) {
+					s = s+P[i];
+				}
+				if (spec) s = s+"s";
+				s += " "+currentLevel;
+			}
+			g.drawString(fps/10+"."+fps%10+s, 0, 0, Graphics.TOP|Graphics.LEFT);
+		}
+		needFullRedraw = false;
+		//g.drawImage(bb, 0, 0, 0);
+	}
+
+	public void startApp() {
+		Display.getDisplay(this).setCurrent(canvas);
+
+		Thread t = new Thread(this);
+		t.start();
+	}
+	public void pauseApp() {
+	}
+	public void destroyApp(boolean unconditional) {
+	}
+
+	public void run() {
+		for (;;) {
+			long startTime = System.currentTimeMillis();
+			fps = (int)(10000/(startTime-lastTime+1));
+			lastTime = startTime;
+
+			tick();
+			long endTime = System.currentTimeMillis();
+			int t = (int)(1000/12-(endTime - startTime)); // 12 fps
+			if (t>0) {
+				try {
+					Thread.sleep(t);
+				} catch (InterruptedException e) {
+				}
+			}
+		}
+	}
+
+	void createBullet(boolean fromPlayer, int x, int y, int dx, int dy, int hit, int type) {
+		int i;
+		for (i=0; i<bullets.length; i++) {
+			if (bullets[i]==null) break;
+		}
+		if (i<bullets.length) {
+			bullets[i] = new Bullet(this, fromPlayer, x, y, dx, dy, hit, type);
+		}
+	}
+
+	void doPlayerFire() {
+		int speed = 4;
+		if (playerFrontGun==2) speed = 7;
+		if (lastShotTick+speed<ticks) {
+			// ezt a switchet majd atfogalmazni tombokre
+			switch (playerFrontGun) {
+				case 0:
+					switch (playerFrontGunLevel) {
+						case 0:
+							createBullet(true, (playerX+10)<<8, playerY<<8, 0, -4<<8, 10, 0);
+							break;
+						case 1:
+							createBullet(true, (playerX+10-6)<<8, (playerY+4)<<8, 0, -4<<8, 10, 0);
+							createBullet(true, (playerX+10+6)<<8, (playerY+4)<<8, 0, -4<<8, 10, 0);
+							break;
+						case 2:
+							createBullet(true, (playerX+10  )<<8, playerY<<8, 0, -4<<8, 10, 0);
+							createBullet(true, (playerX+10-4)<<8, playerY<<8, -296, -980, 10, 0);
+							createBullet(true, (playerX+10+4)<<8, playerY<<8, 296, -980, 10, 0);
+							break;
+					}
+					break;
+				case 1:
+					switch (playerFrontGunLevel) {
+						case 0:
+							createBullet(true, (playerX+10)<<8, playerY<<8, 0, -4<<8, 20, 5);
+							break;
+						case 1:
+							createBullet(true, (playerX+10-6)<<8, (playerY+4)<<8, 0, -4<<8, 20, 5);
+							createBullet(true, (playerX+10+6)<<8, (playerY+4)<<8, 0, -4<<8, 20, 5);
+							break;
+						case 2:
+							createBullet(true, (playerX+10  )<<8, playerY<<8, 0, -4<<8, 30, 8);
+							createBullet(true, (playerX+10-4)<<8, playerY<<8, -4<<8, 0, 20, 6);
+							createBullet(true, (playerX+10+4)<<8, playerY<<8, 4<<8, 0, 20, 7);
+							break;
+					}
+					break;
+				case 2:
+					switch (playerFrontGunLevel) {
+						case 0:
+							createBullet(true, (playerX+10)<<8, playerY<<8, 0, -4<<8, 30, 1);
+							break;
+						case 1:
+							createBullet(true, (playerX+10-6)<<8, (playerY+4)<<8, 0, -4<<8, 40, 1);
+							createBullet(true, (playerX+10+6)<<8, (playerY+4)<<8, 0, -4<<8, 40, 1);
+							break;
+						case 2:
+							createBullet(true, (playerX+10  )<<8, playerY<<8, 0, -4<<8, 40, 4);
+							createBullet(true, (playerX+10-4)<<8, playerY<<8, -724, -724, 30, 3);
+							createBullet(true, (playerX+10+4)<<8, playerY<<8, 724, -724, 30, 2);
+							break;
+					}
+					break;
+				case 3:
+					switch (playerFrontGunLevel) {
+						case 0:
+							createBullet(true, (playerX+10)<<8, playerY<<8, 0, -4<<8, 40, 9);
+							break;
+						case 1:
+							createBullet(true, (playerX+10)<<8, playerY<<8, 0, -4<<8, 40, 10);
+							break;
+						case 2:
+							createBullet(true, (playerX+10)<<8, playerY<<8, 0, -4<<8, 40, 11);
+							break;
+					}
+			}
+
+			lastShotTick = ticks;
+		}
+
+		if (lastBackShotTick+3<ticks) {
+			switch (playerBackGun) {
+				case 0:
+					if (playerBackGunLevel==0) {
+						createBullet(true, (playerX+10)<<8, (playerY+playerImage.getHeight())<<8, 0, 4<<8, 40, 12);
+					} else {
+						if ((ticks&4)==0) {
+							createBullet(true, (playerX+10)<<8, (playerY+playerImage.getHeight())<<8, -296, 980, 40, 12);
+						} else {
+							createBullet(true, (playerX+10)<<8, (playerY+playerImage.getHeight())<<8, 296, 980, 40, 12);
+						}
+					}
+					break;
+				case 1:
+					createBullet(true, (playerX+10)<<8, (playerY+playerImage.getHeight())<<8, 0, 0, 40, 13);
+					break;
+			}
+			lastBackShotTick = ticks;
+		}
+	}
+
+	public void tick() {
+		for (int i=0; i<16; i++) {
+			int s = playerExtraOrbitSin + (playerExtraOrbitCos>>6);
+			int c = playerExtraOrbitCos - (playerExtraOrbitSin>>6);
+
+			playerExtraOrbitSin = s;
+			playerExtraOrbitCos = c;
+		}
+		{
+			int l = sqrt(playerExtraOrbitSin*playerExtraOrbitSin + playerExtraOrbitCos*playerExtraOrbitCos);
+			playerExtraOrbitSin = 0x4000*playerExtraOrbitSin/l;
+			playerExtraOrbitCos = 0x4000*playerExtraOrbitCos/l;
+		}
+
+		if (P[8]==1) {
+		ticks++;
+		leftClosed = false;
+		rightClosed = false;
+
+		leftRedonyPosition += leftRedonyDelta*2;
+		if (leftRedonyPosition<-75) {
+			leftRedonyPosition = -75;
+		}
+		if (leftRedonyPosition>=0) {
+			leftRedonyPosition = 0;
+			leftClosed = true;
+		}
+		rightRedonyPosition -= rightRedonyDelta*2;
+		if (rightRedonyPosition<=75) {
+			rightRedonyPosition = 75;
+			rightClosed = true;
+		}
+		if (rightRedonyPosition>128) {
+			rightRedonyPosition = 128;
+		}
+
+		if (state==1&&leftClosed&&rightClosed) {
+			state=10;
+			leftRedonyDelta = -leftRedonyDelta;
+			rightRedonyDelta = -rightRedonyDelta;
+
+			for (int i=0; i<bullets.length; i++) bullets[i] = null;
+			playerX = 38;
+			playerY = 72;
+			backgroundPosition = 0;
+			currentEnemyDesc = 0;
+			lastHpPainted = -10000;
+			message = "Level 1";
+			messageTicks = 20;
+		}
+
+		if ((state==0||state==1)&&leftBackground==1) {
+			for (int i=0; i<bullets.length; i++) {
+				Bullet b = bullets[i];
+				if (b!=null) {
+					if (b.tick()) {
+						bullets[i] = null;
+					}
+				}
+			}
+			doPlayerFire();
+
+			backgroundPosition++;
+			if (backgroundPosition>=32) backgroundPosition=0;
+		}
+
+		if (state==10) {
+			if (playerHp>0) {
+				if (BANKAMOUNT>0) BANKAMOUNT--;
+				if (BANKAMOUNT<0) BANKAMOUNT++;
+				if (keyStatus[Canvas.UP]) {
+					playerY-=4;
+					if (playerY<0) playerY = 0;
+				}
+				if (keyStatus[Canvas.DOWN]) {
+					playerY+=4;
+					if (playerY>pheight-playerImage.getHeight()) playerY = pheight-playerImage.getHeight();
+				}
+				if (keyStatus[Canvas.LEFT]) {
+					playerX-=4;
+					if (playerX<0) playerX = 0;
+					BANKAMOUNT-=2;
+				}
+				if (keyStatus[Canvas.RIGHT]) {
+					playerX+=4;
+					if (playerX>pwidth-playerImage.getWidth()) playerX = pwidth-playerImage.getWidth();
+					BANKAMOUNT+=2;
+				}
+				if (BANKAMOUNT<-3) BANKAMOUNT=-3;
+				if (BANKAMOUNT>3) BANKAMOUNT=3;
+				//if (keyStatus[Canvas.FIRE]) {
+				if (fire) {
+					doPlayerFire();
+				}
+			} else {
+				playerExplosionFrame++;
+				if (playerExplosionFrame==6) {
+					playerHp = 100;
+					playerExplosionFrame = 0;
+					playerLives--;
+					if (playerLives<0) playerLives=5;
+				}
+			}
+		}
+
+		playerExtraOrbitX = playerX+playerImage.getWidth()/2-extraGunImages[0].getWidth()/2;
+		playerExtraOrbitY = playerY+playerImage.getHeight()/2-extraGunImages[0].getHeight()/2;
+		playerExtraOrbitDX = (10*playerExtraOrbitCos>>13);
+		playerExtraOrbitDY = (10*playerExtraOrbitSin>>13);
+
+		if (state==10) {
+			for (int i=0; i<enemies.length; i++) {
+				if (enemies[i]!=null) {
+					if (enemies[i].tick()) {
+						enemies[i] = null;
+					} else {
+						if (playerHp>0&&enemies[i].hp>0&&enemies[i].collide(playerX, playerY, playerImage.getWidth(), playerImage.getHeight())) {
+							playerHp -= enemies[i].hp;
+							enemies[i].hp = 0;
+						}
+					}
+				}
+			}
+
+			for (int i=0; i<bullets.length; i++) {
+				Bullet b = bullets[i];
+				if (b!=null) {
+					if (b.tick()) {
+						bullets[i] = null;
+					} else {
+						if (b.fromPlayer) {
+							for (int j=0; j<enemies.length; j++) {
+								if (enemies[j]!=null) {
+									if (enemies[j].collide(b.x>>8, b.y>>8, b.width(), b.height())) {
+										enemies[j].hit(b.hit);
+										if (enemies[j].hp<=0) {
+											score++;
+										}
+										bullets[i] = null;
+										break;
+									}
+								}
+							}
+						} else {
+							int x = b.x>>8;
+							int y = b.y>>8;
+							int width = b.width();
+							int height = b.height();
+
+							if (x+width>=playerX&&y+height>=playerY&&x<playerX+playerImage.getWidth()&&y<playerY+playerImage.getHeight()) {
+								playerHp -= b.hit;
+								bullets[i] = null;
+							}
+						}
+					}
+				}
+			}
+
+			for (int j=0; j<enemies.length; j++) {
+				if (enemies[j]!=null) {
+					if (enemies[j].collide(playerExtraOrbitX+playerExtraOrbitDX, playerExtraOrbitY+playerExtraOrbitDY, extraGunImages[0].getWidth(), extraGunImages[0].getHeight())) {
+						enemies[j].hit(100);
+						if (enemies[j].hp<=0) {
+							score++;
+						}
+						break;
+					}
+				}
+			}
+
+			for (;currentEnemyDesc<enemyDesc.length;) {
+				int pos = enemyDesc[currentEnemyDesc];
+				if (pos<0) pos = 256+pos;
+				pos += enemyDesc[currentEnemyDesc+1]<<8;
+
+				if (pos==backgroundPosition) {
+					int i;
+					for (i=0; i<enemies.length; i++) {
+						if (enemies[i]==null) break;
+					}
+					int p = enemyDesc[currentEnemyDesc+3];
+					enemies[i] = new Enemy(this, enemyDesc[currentEnemyDesc+2], p>=0?paths[p]:null, enemyDesc[currentEnemyDesc+4], enemyDesc[currentEnemyDesc+5]);
+					currentEnemyDesc += 6;
+				} else break;
+			}
+
+			backgroundPosition++;
+		}
+		}
+
+		if (message!=null) {
+			messageTicks--;
+			if (messageTicks<0) message=null;
+		}
+
+		canvas.repaint();
+		canvas.serviceRepaints();
+	}
+
+	public void keyPressed(int keyCode) {
+		if (spec) {
+			switch (keyCode) {
+				case Canvas.KEY_NUM1: P[0] = 1-P[0]; break;
+				case Canvas.KEY_NUM2: P[1] = 1-P[1]; break;
+				case Canvas.KEY_NUM3: P[2] = 1-P[2]; break;
+				case Canvas.KEY_NUM4: P[3] = 1-P[3]; break;
+				case Canvas.KEY_NUM5: P[4] = 1-P[4]; break;
+				case Canvas.KEY_NUM6: P[5] = 1-P[5]; currentLevel = 0; break;
+				case Canvas.KEY_NUM7: P[6] = 1-P[6]; currentLevel = 1; break;
+				case Canvas.KEY_NUM8: P[7] = 1-P[7]; currentLevel = 2; break;
+				case Canvas.KEY_NUM9: P[8] = 1-P[8]; currentLevel = 3; break;
+			}
+			spec = false;
+			return;
+		}
+
+		int ga = canvas.getGameAction(keyCode);
+		if (ga==0) {
+			switch (keyCode) {
+				case Canvas.KEY_NUM3: fpsDisplay = fpsDisplay+1; if (fpsDisplay>2) fpsDisplay=0; break;
+				case Canvas.KEY_NUM2: keyStatus[Canvas.UP] = true; break;
+				case Canvas.KEY_NUM8: keyStatus[Canvas.DOWN] = true; break;
+				case Canvas.KEY_NUM4: keyStatus[Canvas.LEFT] = true; break;
+				case Canvas.KEY_NUM5: keyStatus[Canvas.RIGHT] = true; break;
+
+				case Canvas.KEY_NUM0: spec = true; break;
+			}
+		} else if (ga<20) {
+			if (ga==Canvas.DOWN) {
+				if (state==0) {
+					currentSelectedMenuItem++;
+					if (currentSelectedMenuItem>=nMenuPoints[currentMenuToPaint()]) {
+						currentSelectedMenuItem = 0;
+					}
+				}
+			} else if (ga==Canvas.UP) {
+				if (state==0) {
+					currentSelectedMenuItem--;
+					if (currentSelectedMenuItem<0) {
+						currentSelectedMenuItem = nMenuPoints[currentMenuToPaint()]-1;
+					}
+				}
+			} else if (ga==Canvas.FIRE) {
+				fire = !fire;
+				if (state==0) {
+					switch (currentMenu) {
+						case 0:
+							switch (currentSelectedMenuItem) {
+								case 0:
+									currentMenu = 1;
+									break;
+							}
+							break;
+						case 1:
+							switch (currentSelectedMenuItem) {
+								case 0:
+									currentMenu = 2;
+									break;
+							}
+							break;
+						case 2:
+							switch (currentSelectedMenuItem) {
+								case 0:
+									leftRedonyDelta = 4;
+									rightRedonyDelta = 4;
+									state = 1;
+									playerLives = 3;
+									break;
+								case 1:
+									if (leftClosed) {
+										currentMenu = 3;
+										currentSelectedMenuItem = 0;
+										leftRedonyDelta = -4;
+										leftBackground=2;
+									}
+									break;
+								case 2:
+									if (leftClosed) {
+										currentMenu = 4;
+										currentSelectedMenuItem = 0;
+										leftRedonyDelta = -4;
+										leftBackground=1;
+										playerX = 27;
+										playerY = 70;
+										fire = false;
+									}
+									break;
+							}
+							break;
+						case 3:
+							switch (currentSelectedMenuItem) {
+								case 0:
+								case 1:
+								case 2:
+									playerType = currentSelectedMenuItem;
+									break;
+								//case 0:
+									//currentMenu = 4;
+									//currentSelectedMenuItem = 0;
+									//break;
+								case 3:
+									currentMenu = 2;
+									currentSelectedMenuItem = 1;
+									leftRedonyDelta = 4;
+									break;
+							}
+							break;
+						case 4:
+							switch (currentSelectedMenuItem) {
+								case 0:
+									currentMenu = 5;
+									currentSelectedMenuItem = 0;
+									break;
+								case 1:
+								case 2:
+								case 3:
+									currentMenu = 6;
+									currentSelectedMenuItem = 0;
+									break;
+								case 4:
+									currentMenu = 2;
+									currentSelectedMenuItem = 2;
+									leftRedonyDelta = 4;
+									break;
+							}
+							break;
+						case 5:
+							switch (currentSelectedMenuItem) {
+								case 0:
+									playerFrontGunLevel++;
+									if (playerFrontGunLevel==3) {
+										playerFrontGunLevel=0;
+										playerFrontGun++;
+										if (playerFrontGun==4) playerFrontGun=0;
+									}
+									break;
+								case 1:
+									playerFrontGunLevel--;
+									if (playerFrontGunLevel==-1) {
+										playerFrontGunLevel=2;
+										playerFrontGun--;
+										if (playerFrontGun==-1) playerFrontGun=3;
+									}
+									break;
+								case 4:
+									currentMenu = 4;
+									currentSelectedMenuItem = 0;
+									break;
+							}
+							break;
+						case 6:
+							switch (currentSelectedMenuItem) {
+								case 0:
+									playerBackGunLevel++;
+									if (playerBackGunLevel==2) {
+										playerBackGunLevel=0;
+										playerBackGun++;
+										if (playerBackGun==2) playerBackGun=0;
+									}
+									break;
+								case 1:
+									playerBackGunLevel--;
+									if (playerBackGunLevel==-1) {
+										playerBackGunLevel=1;
+										playerBackGun--;
+										if (playerBackGun==-1) playerBackGun=1;
+									}
+									break;
+								case 4:
+									currentMenu = 4;
+									currentSelectedMenuItem = 1;
+									break;
+							}
+							break;
+					}
+
+					//state = 1;
+					//toPlayAnimation = 0;
+				}
+			}
+			keyStatus[ga] = true;
+		}
+	}
+	public void keyReleased(int keyCode) {
+		int ga = canvas.getGameAction(keyCode);
+		if (ga==0) {
+			switch (keyCode) {
+				case Canvas.KEY_NUM2: keyStatus[Canvas.UP] = false; break;
+				case Canvas.KEY_NUM8: keyStatus[Canvas.DOWN] = false; break;
+				case Canvas.KEY_NUM4: keyStatus[Canvas.LEFT] = false; break;
+				case Canvas.KEY_NUM5: keyStatus[Canvas.RIGHT] = false; break;
+			}
+		} else if (ga<20) {
+			keyStatus[ga] = false;
+		}
+	}
+
+	public void commandAction(Command c, Displayable d) {
+	}
+
+	static int sqrt(int v) {
+		int root = 0;
+		for (int d=0x10000000; d!=0; d>>=2) {	// root := 0.5*(root - v/root)
+			int t = root+d;
+			root>>=1;		// root = (prevroot + prevd) / 2
+			if (t<=v) {
+				v -= t;
+				root += d;
+			}
+		}
+		return root;
+	}
+
+}

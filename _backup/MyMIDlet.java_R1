@@ -1,0 +1,1226 @@
+import javax.microedition.lcdui.*;
+import javax.microedition.midlet.*;
+import java.util.*;
+import java.io.*;
+
+/**********************************************************************************
+/* Misc. stuff
+/**********************************************************************************/
+final class Stuff {
+	public static final String readLine(InputStream is) throws IOException {
+		byte[] buf = new byte[127];
+		int index = 0;
+		for (buf[index] = (byte)is.read(); buf[index] > 0 && buf[index] != '\n'; buf[++index] = (byte)is.read());
+		return new String(buf, 0, index);
+	}
+
+	public static final int ln2(int in) {
+		int ret = -1;
+		for (; in != 0; ret++) in >>= 1;
+		return ret;
+	}
+
+	public static final int ln10(int in) {
+		if (in < 10) return 0;
+		if (in < 100) return 1;
+		if (in < 1000) return 2;
+		if (in < 10000) return 3;
+		if (in < 100000) return 4;
+		if (in < 1000000) return 5;
+		if (in < 10000000) return 6;
+		if (in < 100000000) return 7;
+		if (in < 1000000000) return 8;
+		return 9;
+	}
+
+	public static final int greatestPowerOfTen(int in) {
+		if (in < 10) return 0;
+		if (in < 100) return 10;
+		if (in < 1000) return 100;
+		if (in < 10000) return 1000;
+		if (in < 100000) return 10000;
+		if (in < 1000000) return 100000;
+		if (in < 10000000) return 1000000;
+		if (in < 100000000) return 10000000;
+		if (in < 1000000000) return 100000000;
+		return 1000000000;
+	}
+
+	public static final int sqrt(int v) {
+		int root = 0;
+		for (int d=0x10000000; d!=0; d>>=2) {	// root := 0.5*(root - v/root)
+			int t = root+d;
+			root>>=1;		// root = (prevroot + prevd) / 2
+			if (t<=v) {
+				v -= t;
+				root += d;
+			}
+		}
+		return root;
+	}
+	
+	// sin+cos: tablazattal
+	public final static int sin[] = {0, 1143, 2287, 3429, 4571, 5711, 6850, 7986, 9120, 10252, 11380, 12504, 13625, 14742, 15854, 16962, 18064, 19160, 20251, 21336, 22414, 23486,
+									24550, 25607, 26655, 27696, 28729, 29752, 30767, 31772, 32768, 33753, 34728, 35693, 36647, 37589, 38521, 39440, 40348, 41243, 42125, 42995,
+									43852, 44695, 45525, 46340, 47142, 47930, 48702, 49460, 50203, 50931, 51643, 52339, 53019, 53683, 54331, 54963, 55577, 56175, 56755, 57319,
+									57864, 58393, 58903, 59395, 59870, 60326, 60763, 61183, 61583, 61965, 62328, 62672, 62997, 63302, 63589, 63856, 64103, 64331, 64540, 64729,
+									64898, 65047, 65177, 65286, 65376, 65446, 65496, 65526, 65536};
+								
+	public static final int sin(int degree) {
+		if (degree >= 180) {
+			if (degree >= 270) {		// 269-359
+				return -sin[360-degree];
+			} else {					// 180-269
+				return -sin[degree-180];
+			}
+		} else {
+			if (degree >= 90) {			// 90-179
+				return sin[180-degree];
+			} else {					// 0-89
+				return sin[degree];
+			}
+		}
+	}
+
+	public static final int cos(int degree) {
+		if (degree >= 180) {
+			if (degree >= 270) {		// 269-359
+				return sin[degree];
+			} else {					// 180-269
+				return -sin[270-degree];
+			}
+		} else {
+			if (degree >= 90) {			// 90-179
+				return -sin[degree-90];
+			} else {					// 0-89
+				return sin[90-degree];
+			}
+		}
+	}
+}
+
+/**********************************************************************************
+/* MAIN
+/**********************************************************************************/
+final class MyCanvas extends Canvas implements Runnable {
+
+	public static Display MyDisplay;
+	static final int shipSpeed = 64;
+	static final int maxBGShift = 16;
+	static final int maxShipSlideTime = 192;
+	
+	static int scrX, scrY, pleft, pright, ptop, pbottom;
+	static int fShipX, fShipY, fShipSlidePos, fShipLimitX, fShipLimitY, shipHP, shipSlideTime, shipWeaponFront, shipWeaponBack, shipFrontFired, shipBackFired;
+	static int pwidth, pheight, pmiddle, penwidth;
+	static int vscrl, vscrr, vscrdelta, maxvscrdelta, fMaxBGSpeed, fEnemyBGSpeed, fMaxEnShift;
+	static int tileHeightToDraw;
+	
+	static long levelStartTime;
+	static int lastFrameTime, accFrameTime, lastFrameStart, actFrameStart;
+	static int fAccBGPos;
+	
+	static boolean dontDrawLevel = true;
+	
+	static Image[] bgImages;
+	static int[] bgWidth, bgHeight;
+	static Drawable[] bgLayers;
+
+	static Enemy[] enemies;
+	static Image[] enemyImages = new Image[16];
+	static int[] enHeight = new int[16];
+	static int[] enWidth = new int[16];
+	static int[] fenHeight = new int[16];
+	static int[] fenWidth = new int[16];
+	static final int[] enSpeed = {32, 32, 32, 32, 16, 16, 16, 16};
+	static final int[] enExpl = {0, 0, 0, 0, 0, 0, 0, 0};
+	static final int[] enExplSize = {32, 32, 32, 32, 32, 32, 32, 32};
+	static final int[] fenExplSize = {32<<8, 32<<8, 32<<8, 32<<8, 32<<8, 32<<8, 32<<8, 32<<8};
+	static int enBegin = 0;
+	
+	static Image[] bulletImages = new Image[14];
+	// TODO: bulletmereteket static final-ba rakni (speedup)
+	static int[] bulletHeight = new int[14];
+	static int[] bulletWidth = new int[14];
+	static int[] fbulletHeight = new int[14];
+	static int[] fbulletWidth = new int[14];
+	static Bullet[] bullets = new Bullet[128];
+	static int bulletLast = 0;
+	static final int[] weaponRate = {128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128};
+	static final int[] bulletFrameNum = {1, 3, 2, 2, 3, 3, 3, 3, 3, 3, 3, 1, 1, 1};
+	
+	static Image[] explosionImages;
+
+	static Image shipImage;
+	static final int shipWidth = 20, shipHeight = 20;
+	
+	static Path[] pathes;
+
+	static Image numberImage;
+	static final int[] numberWidth = {6, 6, 7, 6, 8, 6, 6, 7, 7, 6};
+	static final int[] numberStart = {0, 6, 12, 19, 25, 33, 39, 45, 52, 59};
+	static final int numberHeight = 5;
+	
+	static final int[] fontWidth = {8, 7, 8, 8, 7, 7, 8, 8, 5, 5, 7, 6, 9, 8, 9, 7, 9, 6, 7, 7, 8, 7, 11, 7, 7, 7};
+	static final int[] fontStart = {0, 8, 15, 23, 31, 38, 45, 53, 61, 66, 71, 78, 84, 93, 101, 110, 117, 126, 132, 139, 146, 154, 161, 172, 179, 186};
+	static final int fontHeight = 8;
+	static Image fontImage;
+	
+	static Image topBorder, topLives, topScore;
+	static Image 
+	
+	// TODO: delete these temp global variables
+	int weaponchangetimer = 0;
+
+	public MyCanvas() {
+		scrX = 128;//getWidth();
+		scrY = 128;//getHeight();
+		pleft = 0;
+		pright = scrX;
+		ptop = 5;
+		pbottom = scrY;
+		
+		pwidth = pright-pleft;
+		pheight = pbottom-ptop;
+		pmiddle = pleft+(pwidth/2);
+		fShipLimitX = (pwidth-shipWidth)<<8;
+		fShipLimitY = (pheight-shipHeight)<<8;
+		fShipX = fShipLimitX/2;
+		fShipY = fShipLimitY;
+
+		tileHeightToDraw = ((pheight+128)>>5);
+		if ((pheight & 0x1f) > 0) tileHeightToDraw++;
+		
+		vscrl = (pwidth>>1) - 96;
+		vscrr = (pwidth>>1) + 96;
+	}
+	
+/**********************************************************************************
+/* LOAD
+/**********************************************************************************/
+	public void loadLevel(int levelNum) {
+		try {
+			// images
+			Vector v = new Vector(20,10);
+			InputStream is = getClass().getResourceAsStream("/l"+levelNum+"trl");
+		
+			for (int i = 0; ; i++) {
+				String imageFile = Stuff.readLine(is);
+				if (imageFile.length() <= 1) break;
+				v.addElement(Image.createImage(imageFile));
+			}
+			bgImages = new Image[v.size()];
+			v.copyInto(bgImages);
+			
+			bgWidth = new int[bgImages.length];
+			bgHeight = new int[bgImages.length];
+			for (int i = 0; i < bgImages.length; i++) {
+				bgWidth[i] = bgImages[i].getWidth();
+				bgHeight[i] = bgImages[i].getHeight();
+			}
+		
+			// pathes
+			if (pathes == null) {
+				is = getClass().getResourceAsStream("/p");
+				int pNum = is.read();
+				pathes = new Path[pNum];
+				for (int i = 0; i < pNum; i++) {
+					int len = is.read();
+					Path actpath = new Path(len);
+					pathes[i] = actpath;
+					for (int j = 0; j < len; j++) {
+						actpath.x[j] = is.read();
+						actpath.y[j] = is.read();
+						actpath.speed[j] = is.read();
+						actpath.speed[j] += is.read()<<8;
+						actpath.wait[j] = is.read();
+						actpath.wait[j] += is.read()<<8;
+					}
+					actpath.init();
+				}
+			}
+			
+			// level layers
+			is = getClass().getResourceAsStream("/l"+levelNum);
+			int bgNum = is.read();
+			bgLayers = new Drawable[bgNum];
+			for (int i = 0; i < bgNum; i++) {
+				int len = is.read();
+				if (len == -1) break;
+				len += is.read()<<8;
+
+				int speed = is.read();
+				speed += is.read()<<8;
+				if (speed > fMaxBGSpeed) fMaxBGSpeed = speed;
+				fEnemyBGSpeed = speed;
+				
+				int stretch = is.read();
+
+				byte[] bg = new byte[len];
+				is.read(bg);
+
+				switch (stretch) {
+					case 0:
+						bgLayers[i] = new CenteredLevelLayer(bg, speed); break;
+					case 1:
+						bgLayers[i] = new RepeatedLevelLayer(bg, speed); break;
+					case 2:
+						bgLayers[i] = new JustifiedLevelLayer(bg, speed); break;
+				}
+			}
+			maxvscrdelta = (maxBGShift<<16)/fMaxBGSpeed;
+			fMaxEnShift = maxBGShift*((fEnemyBGSpeed<<8)/fMaxBGSpeed);
+			penwidth = pwidth+((fMaxEnShift)>>7);
+			// propagaljuk - eleg szerencsetlen, de meg mindig a legkisebb eroforrasugenyu
+			for (int i = 0; i < bgLayers.length; i++)
+				if (bgLayers[i] instanceof JustifiedLevelLayer)
+					((JustifiedLevelLayer)bgLayers[i]).postInit();
+			
+			// enemies
+			int enNum = is.read();
+			enemies = new Enemy[enNum];
+			for (int i = 0; i < enNum; i++) {
+				int type = is.read();
+				int bgPos = is.read();
+				bgPos += is.read()<<8;
+
+				int path = is.read();
+				int dx = is.read();
+				int dy = is.read();
+				int hp = is.read();
+				hp += is.read()<<8;
+				int weapon = is.read();
+				int point = is.read();
+				point += is.read()<<8;
+
+				enemies[i] = new Enemy(type, bgPos, path, dx, dy, hp, weapon, point);
+				
+				// images
+				if (enemyImages[type] == null) {
+					enemyImages[type] = Image.createImage("/en/e"+(type/10)+(type%10)+".png");
+					enWidth[type] = enemyImages[type].getWidth();
+					enHeight[type] = enemyImages[type].getHeight();
+					fenWidth[type] = enWidth[type]<<8;
+					fenHeight[type] = enHeight[type]<<8;
+				}
+			}
+			
+			// explosion images
+			if (explosionImages == null) {
+				explosionImages = new Image[3];
+				for (int i = 0; i < 3; i++) {
+					explosionImages[i] = Image.createImage("/ex"+i+".png");
+				}
+			}
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			System.exit(1);
+		}
+	}
+
+	public void loadMenu() {
+		try {
+			// ship images
+			if (shipImage == null) {
+				shipImage = Image.createImage("/pl.png");
+			}
+			
+			// bullets
+			if (bulletImages[0] == null) {
+				for (int i = 0; i < bulletImages.length; i++) {
+					bulletImages[i] = Image.createImage("/en/b"+(i/10)+(i%10)+".png");
+					bulletWidth[i] = bulletImages[i].getWidth()/bulletFrameNum[i];
+					bulletHeight[i] = bulletImages[i].getHeight();
+					fbulletWidth[i] = bulletWidth[i]<<8;
+					fbulletHeight[i] = bulletHeight[i]<<8;
+				}
+			}
+
+			// number & font images
+			if (numberImage == null) {
+				numberImage = Image.createImage("/num.png");
+				fontImage = Image.createImage("/font.png");
+			}
+			
+			// menu images
+			if (topImage == null) {
+				topImage = Image.createImage("/t.png");
+			}
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			System.exit(1);
+		}
+	}
+
+	
+	public static void disposeLevel() {
+		dontDrawLevel = true;
+		bgLayers = null;
+		bgImages = null;
+		bgWidth = null;
+		bgHeight = null;
+		enemies = null;
+		enemyImages = new Image[16];
+		pathes = null;
+		explosionImages = null;
+	}
+	
+/**********************************************************************************
+/* MOVE
+/**********************************************************************************/
+	public void init() {
+		loadLevel(0);
+
+		// reinit values
+		accFrameTime = 0;
+		fAccBGPos = 0;
+		actFrameStart = 0;
+		levelStartTime = System.currentTimeMillis()-10;
+		enBegin = 0;
+		shipHP = 100;
+		shipSlideTime = maxShipSlideTime/2;
+		bullets = new Bullet[bullets.length];
+		bulletLast = 0;
+		
+		run();
+		//repaint();
+		//MyDisplay.callSerially(this);
+	}
+	
+	public void run() {
+		// idoszamitas
+		lastFrameStart = actFrameStart;
+		actFrameStart = (int)(System.currentTimeMillis()-levelStartTime);
+		lastFrameTime = (actFrameStart - lastFrameStart)>>2;
+		if (lastFrameTime > 32) lastFrameTime = 32;		// 8 fps alatt lassul a jatek
+		accFrameTime += lastFrameTime;
+
+		int unslideTime = lastFrameStart;
+
+		// input eventek lekezelese
+		synchronized(ehie) {
+			int num = ehSize();
+			for (int i = 0; i < num; i++) {
+				InputEvent ie = ehNext();
+				int length = ie.length;
+
+				// nem iranyitott ido kezelese
+				if (unslideTime < actFrameStart) {
+					int t = (ie.start-unslideTime)>>2;
+					if (t > 0) 	unslidePlayer(t);
+
+					if (length < 0) {
+						unslideTime = actFrameStart;
+					} else {
+						unslideTime = ie.start+ie.length;
+					}
+				}
+
+				if (length < 0) {	// kiszamoljuk, visszarakjuk
+					length = (actFrameStart-ie.start);
+					ie.start = actFrameStart;
+					ehAdd(ie);
+				}
+
+				length >>= 2;	// millisec -> s/256, kozelitoleg, de le van xarva
+
+				switch (ie.key) {
+					case Canvas.UP: 
+						movePlayer(0, -1, length); break;
+
+					case Canvas.DOWN:
+						movePlayer(0, 1, length); break;
+
+					case Canvas.LEFT:
+						movePlayer(-1, 0, length); break;
+
+					case Canvas.RIGHT: 
+						movePlayer(1, 0, length); break;
+
+					case Canvas.FIRE: 
+						weaponchangetimer += length;
+						if (weaponchangetimer > 128) {
+							shipWeaponFront = (shipWeaponFront+1)%12;
+							weaponchangetimer = 0;
+						}
+						break;
+				}					
+			}
+		}
+
+		// ha nem nyomott semmit, unslide az egesz, meg ha maradt meg ido a frame vegen, akkor is
+		if (unslideTime < actFrameStart) unslidePlayer((actFrameStart-unslideTime)>>2);
+
+		repaint();
+		MyDisplay.callSerially(this);
+
+		try {Thread.sleep(2);} catch (Exception e) {}
+	}
+	
+	static void movePlayer(int x, int y, int elapsedTime) {
+		if (x != 0) {
+			fShipX += x*shipSpeed*elapsedTime;
+			if (fShipX < 0) fShipX = 0;
+			if (fShipX > fShipLimitX) fShipX = fShipLimitX;
+			
+			vscrdelta = maxvscrdelta - (((fShipX*((maxvscrdelta<<17)/fShipLimitX))+32768)>>16);
+			//System.out.println(""+vscrdelta+", "+maxvscrdelta+", "+fShipX);
+
+			shipSlideTime += x*elapsedTime;
+			if (shipSlideTime > maxShipSlideTime) shipSlideTime = maxShipSlideTime;
+			if (shipSlideTime < 0) shipSlideTime = 0;
+			//System.out.println("move: "+shipSlideTime);
+		}
+		
+		if (y != 0) {
+			fShipY += y*shipSpeed*elapsedTime;
+			if (fShipY < 0) fShipY = 0;
+			if (fShipY > fShipLimitY) fShipY = fShipLimitY;
+		}
+	}
+
+	static void unslidePlayer(int elapsedTime) {
+		if (shipSlideTime > maxShipSlideTime/2) {
+			shipSlideTime -= elapsedTime;
+			if (shipSlideTime < maxShipSlideTime/2) shipSlideTime = maxShipSlideTime/2;
+		} else {
+			shipSlideTime += elapsedTime;
+			if (shipSlideTime > maxShipSlideTime/2) shipSlideTime = maxShipSlideTime/2;
+		}
+		//System.out.println("unslide: "+shipSlideTime);
+	}
+	
+	void fireWeapon(boolean enemy, int fx, int fy, int type) {
+		//System.out.println("Shoot! "+(fx>>8)+", "+(fy>>8)+", "+type);
+		int nextInd = 0;
+		while (bullets[nextInd] != null) nextInd++;
+
+		switch (type) {
+			/************************************** VULCAN */
+			case 0:
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 90, 96, 0);
+				break;
+				
+			case 1:
+				bullets[nextInd] = new Bullet(enemy, fx-(6<<8), fy, 90, 96, 0);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(6<<8), fy, 90, 96, 0);
+				break;
+				
+			case 2:
+				bullets[nextInd] = new Bullet(enemy, fx-(4<<8), fy, 120, 96, 0);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx   , fy, 90, 96, 0);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(4<<8), fy, 60, 96, 0);
+				break;
+
+			/************************************** ICE */
+			case 3:
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 90, 80, 5);
+				break;
+
+			case 4:
+				bullets[nextInd] = new Bullet(enemy, fx-(6<<8), fy, 90, 80, 5);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(6<<8), fy, 90, 80, 5);
+				break;
+
+			case 5:
+				bullets[nextInd] = new Bullet(enemy, fx-(4<<8), fy, 180, 80, 7);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx       , fy, 90, 80, 8);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(4<<8), fy, 0, 80, 6);
+				break;
+
+			/************************************** FIRE */
+			case 6:
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 90, 65, 1);
+				break;
+
+			case 7:
+				bullets[nextInd] = new Bullet(enemy, fx-(6<<8), fy, 90, 65, 1);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(6<<8), fy, 90, 65, 1);
+				break;
+
+			case 8:
+				bullets[nextInd] = new Bullet(enemy, fx-(4<<8), fy, 135, 65, 3);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx       , fy, 90, 65, 4);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(4<<8), fy, 45, 65, 2);
+				break;
+
+			/************************************** WAVE */
+			case 9:
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 90, 85, 9);
+				break;
+
+			case 10:
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 90, 85, 10);
+				break;
+
+			case 11:
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 90, 85, 11);
+				break;
+		}
+		
+		nextInd++;
+		if (bulletLast < nextInd) bulletLast = nextInd;
+	}
+	
+/**********************************************************************************
+/* PAINT
+/**********************************************************************************/
+	final static boolean collide(int ax1, int ay1, int ax2, int ay2, int bx1, int by1, int bx2, int by2) {
+		int x1max = (ax1 < bx1)?bx1:ax1;
+		int x2min = (ax2 > bx2)?bx2:ax2;
+		
+		if (x1max < x2min) {
+			int y1max = (ay1 < by1)?by1:ay1;
+			int y2min = (ay2 > by2)?by2:ay2;
+					
+			if (y1max < y2min) {
+				return true;
+			}
+		}
+		return false;
+	}
+	
+	public void paint(Graphics g) {
+		if (dontDrawLevel) return;
+		// BG
+		//g.setColor(0, 255, 0); g.fillRect(0, 0, scrX, scrY);
+		
+		// layers
+		for (int i = 0; i < bgLayers.length; i++)
+			bgLayers[i].draw(g);
+		
+		// bulletmozgas
+		int actLastBullet = 0;
+		for (int i = 0; i < bulletLast; i++) {
+			if (bullets[i] != null) {
+				bullets[i].move(lastFrameTime);
+				actLastBullet = i;
+			}
+		}
+		bulletLast = actLastBullet+1;
+		//System.out.println("lastbullet: "+bulletLast);
+		
+		int enbgpos = (int)((accFrameTime*fEnemyBGSpeed)>>16)+(fAccBGPos>>8)+pheight;
+		int fenshift = (((vscrdelta*fEnemyBGSpeed)+128)>>8);			// realpos = virtpos + fenshift
+		int fShipLeft = fShipX, fShipRight = fShipLeft+(shipWidth<<8), fShipTop = fShipY, fShipBottom = fShipY+(shipHeight<<8);
+		
+		// bullet-krealas
+		shipFrontFired += lastFrameTime;
+		while (shipFrontFired > weaponRate[shipWeaponFront]) {
+			shipFrontFired -= weaponRate[shipWeaponFront];
+			fireWeapon(false, fShipX+(shipWidth*256/2), fShipY, shipWeaponFront);
+		}
+		
+		// enemy
+		for (int i = enBegin; i < enemies.length; i++) {
+			if (enemies[i] == null) {
+				if (i == enBegin) enBegin++;
+				//System.out.println("enBegin: "+enBegin);
+				continue;
+			}
+			
+			Enemy en = enemies[i];
+			if (en.pathPoint >= 0) {
+				if (en.explosionTime < 0) {
+					en.move(lastFrameTime);
+
+				} else {
+					en.explosionTime += lastFrameTime;
+					if (en.explosionTime >= 192) {
+						enemies[i] = null;
+						continue;
+					}
+				}
+				
+			} else if (en.bgPos <= enbgpos+enHeight[en.type]) {	// aktival
+				en.activate();
+			
+			} else {
+				break;
+			}
+			
+			// real -> virtual poziciok
+			int fxPos = en.fxAct+fenshift;
+			int fyPos = en.fyAct;
+			int fxPos2, fyPos2;
+
+			if (en.explosionTime < 0) {
+				fxPos2 = fxPos + fenWidth[en.type];
+				fyPos2 = fyPos + fenHeight[en.type];
+
+				// utkozes - enemy vs. ship
+				if (collide(fxPos, fyPos, fxPos2, fyPos2, fShipLeft, fShipTop, fShipRight, fShipBottom)) {
+					en.explosionTime = 0;
+					
+					// explosion size korrigalas
+					int dx = (fenWidth[en.type]>>1)-(fenExplSize[en.type]>>1);
+					int dy = (fenHeight[en.type]>>1)-(fenExplSize[en.type]>>1);
+					en.fxAct += dx;
+					en.fyAct += dy;
+					fxPos += dx;
+					fyPos += dy;
+					fxPos2 = fxPos+fenExplSize[en.type];
+					fyPos2 = fyPos+fenExplSize[en.type];
+
+				} else {
+					// utkozes - enemy vs. bullet
+					for (int j = 0; j < bulletLast; j++) {
+						Bullet b = bullets[j];
+
+						if (b != null && !b.enemy) {
+							int fbulletLeft = b.fxAct;
+							int fbulletRight = fbulletLeft + fbulletWidth[b.type];
+							int fbulletTop = b.fyAct;
+							int fbulletBottom = fbulletTop + fbulletHeight[b.type];
+
+							if (collide(fxPos, fyPos, fxPos2, fyPos2, fbulletLeft, fbulletTop, fbulletRight, fbulletBottom)) {
+								bullets[j] = null;
+								en.explosionTime = 0;
+
+								// explosion size korrigalas
+								int dx = (fenWidth[en.type]>>1)-(fenExplSize[en.type]>>1);
+								int dy = (fenHeight[en.type]>>1)-(fenExplSize[en.type]>>1);
+								en.fxAct += dx;
+								en.fyAct += dy;
+								fxPos += dx;
+								fyPos += dy;
+								fxPos2 = fxPos+fenExplSize[en.type];
+								fyPos2 = fyPos+fenExplSize[en.type];
+							}
+						}
+					}
+				}
+
+			} else {
+				fxPos2 = fxPos+fenExplSize[en.type];
+				fyPos2 = fyPos+fenExplSize[en.type];
+			}
+
+			int xPos = (fxPos)>>8;
+			int yPos = (fyPos>>8)+ptop;
+			int xPos2 = (fxPos2)>>8;
+			int yPos2 = (fyPos2>>8)+ptop;
+			
+			// rajta van-e a kepernyon
+			if (xPos2 <= pleft || xPos >= pright || yPos2 <= ptop || yPos >= pbottom) {
+				if (en.pathPoint == en.p.length) {
+					enemies[i] = null;
+				}
+				continue;
+			}
+
+			// explosion-kirajzolas
+			if (en.explosionTime >= 0) {
+				int actExplSize = enExplSize[en.type];
+				g.setClip(xPos, yPos, actExplSize, actExplSize);
+				g.drawImage(explosionImages[enExpl[en.type]], xPos-((en.explosionTime>>5)*actExplSize), yPos, Graphics.TOP|Graphics.LEFT);
+				continue;
+			}
+
+			g.setClip(pleft, ptop, pwidth, pheight);
+			g.drawImage(enemyImages[en.type], xPos, yPos, Graphics.TOP|Graphics.LEFT);
+		}
+		
+		// TODO: utkozes - bullet vs. ship
+			
+		// bullet-kirakas
+		for (int i = 0; i < bulletLast; i++) {
+			Bullet b = bullets[i];
+			if (b != null) {
+				int actX = b.fxAct>>8;
+				int actY = (b.fyAct>>8)+ptop;
+				int type = b.type;
+				
+				// palyan van-e meg
+				if (actX+bulletWidth[type] <= pleft || actX >= pright || actY+bulletHeight[type] <= ptop || actY >= pbottom) {
+					bullets[i] = null;
+					//System.out.println("deleted "+i+", "+actX);
+					continue;
+				}
+				
+				g.setClip(actX, Math.max(actY, ptop), bulletWidth[type], bulletHeight[type]);
+				g.drawImage(bulletImages[type], actX-(b.actFrame*bulletWidth[type]), actY, Graphics.TOP|Graphics.LEFT);
+			}
+		}
+
+		// ship-kirakas
+		int actShipX = (fShipX>>8)+pleft;
+		int actShipY = (fShipY>>8)+ptop;
+		
+		g.setClip(actShipX, actShipY, shipWidth, shipHeight);
+		g.drawImage(shipImage, actShipX-(((shipSlideTime+16)>>5)*shipWidth), actShipY, Graphics.TOP|Graphics.LEFT);
+		
+		// top
+		g.setClip(0, 0, scrX, scrY);
+		g.drawImage(topImage, 0, 0, Graphics.TOP|Graphics.LEFT);
+		
+		// life
+		writeNumLeft(g, 108, 1, lastFrameTime);
+		
+		// score
+		writeNumRight(g, 35, 1, enBegin);
+	}
+
+	public static void writeNumRight(Graphics g, int x, int y, int num) {
+		do {
+			int digit = num%10;
+			num = num/10;
+			
+			x -= numberWidth[digit];
+			g.setClip(x, y, numberWidth[digit], numberHeight);
+			g.drawImage(numberImage, x-numberStart[digit], y, Graphics.TOP|Graphics.LEFT);
+		} while (num > 0);
+	}
+
+	public static void writeNumLeft(Graphics g, int x, int y, int num) {
+		byte[] digits = new byte[10];
+		int p = -1;
+		do {
+			digits[++p] = (byte)(num%10);
+			num = num/10;
+		} while (num > 0);
+		
+		for (; p >= 0; p--) {
+			int digit = digits[p];
+			g.setClip(x, y, numberWidth[digit], numberHeight);
+			g.drawImage(numberImage, x-numberStart[digit], y, Graphics.TOP|Graphics.LEFT);
+			x += numberWidth[digit];
+		}
+	}
+	
+	public static void writeStringLeft(Graphics g, int x, int y, String s) {
+		int len = s.length();
+		for (int i = 0; i < slen; i++) {
+			int ch = s.charAt(i)-'A';
+			g.setClip(x, y, fontWidth[ch], fontHeight);
+			g.drawImage(fontImage, x-fontStart[ch], y, Graphics.TOP|Graphics.LEFT);
+			x += fontWidth[ch];
+		}
+	}
+
+	public static void writeStringCentered(Graphics g, int x, int y, String s) {
+		int len = s.length();
+		int width = 0;
+		for (int i = 0; i < slen; i++) {
+			int ch = s.charAt(i)-'A';
+			width += fontWidth[ch];
+		}
+		x-=width>>1;
+		writeStringLeft(g, x, y, s);
+	}
+	
+	
+/**********************************************************************************
+/* EVENT
+/**********************************************************************************/
+	final class InputEvent {
+		public int start;
+		public int length = -1;
+		public int key;
+	}
+
+	static InputEvent[] ehie = new InputEvent[16];  // ennyi ugyse lesz 
+	static int ehFirst = 0, ehLast = 0;
+
+	static public int ehSize() {
+		return ehLast-ehFirst;
+	}
+	
+	static public InputEvent ehNext() {
+		if (ehFirst == ehLast) return null;
+		InputEvent ret = ehie[ehFirst&0xf];
+		ehie[ehFirst&0xf] = null;	// DEBUG
+		ehFirst++;
+		return ret;
+	}
+	
+	static public void ehAdd(InputEvent e) {
+		if (ehLast >= 16 && ehFirst >= 16) {
+			ehLast &= 15; ehFirst &= 15;
+		}
+		ehie[ehLast&0xf] = e;
+		ehLast++;
+	}
+	
+	static public InputEvent ehSearch(int key) {
+		for (int i = ehFirst; i < ehLast; i++) {
+			int j = i & 0xf;
+			if (ehie[j].key == key && ehie[j].length < 0) return ehie[j];
+		}
+		throw new Error();
+	}
+	
+	public void keyPressed(int i) {
+		int time = (int)(System.currentTimeMillis()-levelStartTime);
+		int key = getGameAction(i);
+		synchronized(ehie) {
+			InputEvent nie = new InputEvent();
+			nie.start = time;
+			nie.key = key;
+			ehAdd(nie);
+		}
+	}
+	
+	public void keyReleased(int i) {
+		int time = (int)(System.currentTimeMillis()-levelStartTime);
+		int key = getGameAction(i);
+		synchronized(ehie) {
+			InputEvent eie = ehSearch(key);
+			eie.length = (int)(time-eie.start);
+		}
+	}
+
+
+/**********************************************************************************
+/* PATH
+/**********************************************************************************/
+final class Path {
+	public final int[] x, y, speed, wait, fDist, dx, dy;
+	public final int length;
+	
+	public Path(int numPoints) {
+		x = new int[numPoints];
+		y = new int[numPoints];
+		dx = new int[numPoints];
+		dy = new int[numPoints];
+		speed = new int[numPoints];
+		wait = new int[numPoints];
+		fDist = new int[numPoints];
+		length = numPoints-1;
+	}
+	
+	public void init() {
+		for (int i = 0; i < length; i++) {
+			dx[i] = x[i+1]-x[i];
+			dy[i] = y[i+1]-y[i];
+			
+			fDist[i] = Stuff.sqrt((dx[i]*dx[i]*65536) + (dy[i]*dy[i]*65536));	// tavolsag, 8bites fixpontban
+		}
+
+		// utvonal vegeztevel palyan marad
+		dx[length] = dx[length-1];
+		dy[length] = dy[length-1];
+		fDist[length] = fDist[length-1];
+	}
+}
+
+/**********************************************************************************
+/* ACTORS
+/**********************************************************************************/
+final class Bullet {
+	public boolean enemy;
+	public int fxAct, fyAct, angle, speed, type, actFrame, accFrameTime;
+	final int actblfrnum;
+	
+	public Bullet(boolean _enemy, int _fxAct, int _fyAct, int _angle, int _speed, int _type) {
+		enemy = _enemy;
+		fxAct = _fxAct;
+		fyAct = _fyAct;
+		speed = _speed;
+		angle = _angle;
+		type = _type;
+
+		actblfrnum = bulletFrameNum[type];
+		if (enemy) angle = 360-angle;
+		fxAct -= bulletWidth[type]<<7;	// centered bullet
+	}
+	
+	void move(int ft) {
+		// lovedek frame
+		if (actblfrnum > 1) {
+			accFrameTime += ft;
+			actFrame += accFrameTime>>5;
+			accFrameTime &= 0x1f;
+			while (actFrame >= actblfrnum) actFrame -= actblfrnum;
+		}
+		
+		// mozgas
+		int d = ft*speed;
+		fxAct += (Stuff.cos(angle)*d)>>16;
+		fyAct -= (Stuff.sin(angle)*d)>>16;
+	}
+}
+
+final class Enemy {
+	public int bgPos, hp, type, dx, dy, weapon, point;
+	Path p;
+	public int pathPoint = -1;
+	int fxPoint, fyPoint, fdAct;
+	public int fxAct, fyAct;
+	public int explosionTime = -1;
+	
+	public Enemy(int _type, int _bgPos, int _path, int _dx, int _dy, int _hp, int _weapon, int _point) {
+		type = _type;
+		bgPos = _bgPos;
+		dx = _dx;
+		dy = _dy;
+		hp = _hp;
+		weapon = _weapon;
+		point = _point;
+		p = pathes[_path];
+	}
+	
+	void activate() {
+		//System.out.println("Activate: "+bgPos);
+		fxPoint = dx;
+		fyPoint = (((dy-enHeight[type])<<16)/pheight)>>8;	// hogy ne ugorjon be a kepbe semmilyen felbontas mellett sem
+		pathPoint = 0;
+		
+		int temp1 = bgPos - enHeight[type] - pheight - (fAccBGPos>>8);
+		//System.out.println("temp1: "+temp1+", enbgpos: "+enbgpos+", accfrtime: "+accFrameTime);
+
+		int temp2 = (int)(((long)temp1<<16)/fEnemyBGSpeed);
+		//System.out.println("temp2: "+temp2+", fEnemyBGSpeed: "+fEnemyBGSpeed);
+		
+		int time = accFrameTime - temp2;
+		//System.out.println("final time: "+time);
+		move(time);
+	}
+	
+	void move(int ft) {
+		//System.out.println("Move: "+ft+", speed: "+p.speed[pathPoint]);
+		int fdAdv = (ft*enSpeed[type]*p.speed[pathPoint])>>8;
+		int fdRem = p.fDist[pathPoint]-fdAct;
+
+		//System.out.println("fdAdv: "+fdAdv+", fdRem: "+fdRem);
+		while (fdAdv > fdRem) {
+			fdAdv -= fdRem;
+
+			fxPoint += p.dx[pathPoint];
+			fyPoint += p.dy[pathPoint];
+
+			if (pathPoint < p.length) pathPoint++;
+
+			fdAct = 0;
+			fdRem = p.fDist[pathPoint];
+		}
+		
+		// itt mar vagy elert a path vegere, vagy elfogyott az advance
+		fdAct += fdAdv;
+		int fdRatio = (fdAct<<8)/p.fDist[pathPoint];
+		fxAct = (((fxPoint<<8) + (fdRatio*p.dx[pathPoint]))*penwidth)>>8;
+		fyAct = (((fyPoint<<8) + (fdRatio*p.dy[pathPoint]))*pheight)>>8;
+		//System.out.println(" >>> "+fxAct+", "+fyAct+horydebug);
+	}
+}	
+
+/**********************************************************************************
+/* LAYERS
+/**********************************************************************************/
+// TODO: bg hossz check (ha elerte a palya veget, ne dobja el magat!)
+//		 (nem biztos! ha jol van megcsinalva a palya vege, gyorsithat az elhagyasa!)
+interface Drawable {
+	void draw(Graphics g);
+}
+
+final class CenteredLevelLayer implements Drawable {
+	final byte[] bg;
+	public int speed;
+	
+	public CenteredLevelLayer(byte[] _bg, int _speed) {
+		speed = _speed;
+		bg = _bg;
+	}
+	
+	public void draw(Graphics g) {
+		// clip
+		g.setClip(pleft, ptop, pwidth, pheight);
+		
+		// bgpos ujrakalkulalasa
+		int bgPos = (int)((accFrameTime*speed)>>16) + (fAccBGPos>>8);
+		
+		int bgPosMod = bgPos&0x1f;
+		int bgPosDiv = bgPos>>5;
+		int vscrleft = vscrl + (((vscrdelta*speed)+32768)>>16);
+		
+		// kirajzolas
+		int bgIndex = bgPosDiv*12;
+		for (int i = 1; i <= tileHeightToDraw; i++) {
+			int topPos = i<<5;
+
+			for (int j = 0; j < 12; j++) {
+				int actImIndex = bg[bgIndex++];
+				if (actImIndex < 0 || actImIndex >= bgImages.length) continue;
+				
+				// Y irany check
+				if (topPos-bgHeight[actImIndex] > pheight+bgPosMod) continue;
+
+				// X irany check
+				int leftPos = (j << 4)+vscrleft;
+				if (leftPos >= pright || bgWidth[actImIndex]+leftPos < pleft) continue;
+				
+				g.drawImage(bgImages[actImIndex], pleft+leftPos, pbottom + bgPosMod - topPos, Graphics.TOP|Graphics.LEFT);
+			}
+		}
+	}
+}
+
+final class RepeatedLevelLayer implements Drawable {
+	final byte[] bg;
+	public int speed, tileWidthToDraw, startTile, endTile;
+	
+	public RepeatedLevelLayer(byte[] _bg, int _speed) {
+		speed = _speed;
+		bg = _bg;
+
+		int actwidth = pwidth+((maxBGShift*((speed<<8)/fMaxBGSpeed))>>7);
+		tileWidthToDraw = actwidth>>4;
+		if ((pwidth&0xf) != 0) tileWidthToDraw++;
+			
+		startTile = 6-(tileWidthToDraw>>1);
+		endTile = 6+(tileWidthToDraw>>1);
+	}
+	
+	public void draw(Graphics g) {
+		// clip
+		g.setClip(pleft, ptop, pwidth, pheight);
+		
+		// bgpos ujrakalkulalasa
+		int bgPos = (int)((accFrameTime*speed)>>16) + (fAccBGPos>>8);
+		
+		int bgPosMod = bgPos&0x1f;
+		int bgPosDiv = bgPos>>5;
+		int vscrleft = vscrl + (((vscrdelta*speed)+32768)>>16);
+		
+		// kirajzolas
+		for (int i = 1; i <= tileHeightToDraw; i++) {
+			int bgIndex = (bgPosDiv+i-1)*12;
+			int topPos = i<<5;
+
+			for (int j = -7; j < endTile; j++) {
+				int actInd = j;
+				while (actInd < 0) actInd += 6;
+				while (actInd >= 12) actInd -= 6;
+				int actImIndex = bg[bgIndex+actInd];
+				if (actImIndex < 0 || actImIndex >= bgImages.length) continue;
+
+				// Y irany check
+				if (topPos-bgHeight[actImIndex] > pheight+bgPosMod) continue;
+
+				// X irany check
+				int leftPos = (j << 4)+vscrleft;
+				if (leftPos >= pright || bgWidth[actImIndex]+leftPos < pleft) continue;
+
+				g.drawImage(bgImages[actImIndex], pleft+leftPos, pbottom + bgPosMod - topPos, Graphics.TOP|Graphics.LEFT);
+			}
+		}
+	}
+}
+
+final class JustifiedLevelLayer implements Drawable {
+	final byte[] bg;
+	public int speed;
+	int maxShift, justCenterTile;
+	
+	public JustifiedLevelLayer(byte[] _bg, int _speed) {
+		speed = _speed;
+		bg = _bg;
+	}
+
+	public void postInit() {
+		maxShift = ((maxBGShift*((speed<<8)/fMaxBGSpeed))+128)>>8;
+		
+		justCenterTile = (pwidth+maxShift)>>5;
+		if (((pwidth+maxShift)&0x1f) != 0) justCenterTile++;
+		if (justCenterTile > 6) justCenterTile = 6;
+	}
+	
+	public void draw(Graphics g) {
+		// bgpos ujrakalkulalasa
+		int bgPos = (int)((accFrameTime*speed)>>16) + (fAccBGPos>>8);
+		
+		int bgPosMod = bgPos&0x1f;
+		int bgPosDiv = bgPos>>5;
+		int vscrleft = (((vscrdelta*speed)+32768)>>16);
+
+		// kirajzolas
+		// bal oldal
+		g.setClip(pleft, ptop, pwidth>>1, pheight);
+		for (int i = 1; i <= tileHeightToDraw; i++) {
+			int bgIndex = (bgPosDiv+i-1)*12;
+			int topPos = i<<5;
+
+			for (int j = 0; j < justCenterTile; j++) {
+				int actImIndex = bg[bgIndex++];
+				if (actImIndex < 0 || actImIndex >= bgImages.length) continue;
+
+				// Y irany check
+				if (topPos-bgHeight[actImIndex] > pheight+bgPosMod) continue;
+
+				int leftPos = (j<<4)-maxShift+vscrleft;
+
+				g.drawImage(bgImages[actImIndex], pleft+leftPos, pbottom + bgPosMod - topPos, Graphics.TOP|Graphics.LEFT);
+			}
+		}
+
+		//jobb oldal
+		g.setClip(pwidth>>1, ptop, pwidth>>1, pheight);
+		for (int i = 1; i <= tileHeightToDraw; i++) {
+			int bgIndex = (bgPosDiv+i-1)*12+6;
+			int topPos = i<<5;
+
+			for (int j = 6; j < 12; j++) {
+				int actImIndex = bg[bgIndex++];
+				if (actImIndex < 0 || actImIndex >= bgImages.length) continue;
+
+				// X irany check
+				int leftPos = pwidth+maxShift+vscrleft - ((12-j)<<4);
+				if (leftPos >= pright || bgWidth[actImIndex]+leftPos < pleft+(pwidth>>2)) continue;
+
+				// Y irany check
+				if (topPos-bgHeight[actImIndex] > pheight+bgPosMod) continue;
+
+				g.drawImage(bgImages[actImIndex], pleft+leftPos, pbottom + bgPosMod - topPos, Graphics.TOP|Graphics.LEFT);
+			}
+		}
+	}
+}
+
+
+
+
+final class MessageLayer {
+	
+	public boolean draw(Graphics g) {		// true, ha megszunt a layer (alias vege az uzenetnek, te hulye hory)
+		return false;
+	}
+
+}
+
+}
+
+// TODO: pause & stop-ot implementalni
+public class MyMIDlet extends MIDlet {
+	MyCanvas canvas;
+
+	public MyMIDlet() {
+	}
+		
+	public void startApp() {
+		try {
+			canvas = new MyCanvas();
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		canvas.MyDisplay = Display.getDisplay(this);
+		canvas.MyDisplay.setCurrent(canvas);
+
+		canvas.init();
+	}
+	
+	public void pauseApp() {
+	}
+	
+	public void destroyApp(boolean unconditional) {
+	}
+}

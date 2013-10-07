@@ -1,0 +1,7 @@
+#!/bin/bash
+rm -f *.class
+
+if javac PathEditor.java
+then
+	jar cvfm ../res/pe.jar MANIFEST *class
+fi

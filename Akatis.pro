@@ -1,0 +1,4 @@
+-libraryjars /home/hory/WTK2.2/lib/midpapi20.jar:/home/hory/WTK2.2/lib/cldcapi10.jar
+-injars /home/hory/WTK2.2/apps/Akatis/bin/Akatis.jar
+-outjar /tmp/Akatis.jar
+-keep public class * extends javax.microedition.midlet.MIDlet 

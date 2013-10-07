@@ -1,0 +1,13 @@
+#!/bin/bash
+
+cd res
+
+java -jar /home/hory/aka/proguard.jar -injars le.jar -outjars leo.jar -libraryjars /usr/local/jdk/jre/lib/rt.jar -overloadaggressively -allowaccessmodification -keep 'public class LevelEditor {
+    public static void main(java.lang.String[]);
+}'
+java -jar /home/hory/aka/proguard.jar -injars pe.jar -outjars peo.jar -libraryjars /usr/local/jdk/jre/lib/rt.jar -overloadaggressively -allowaccessmodification -keep 'public class PathEditor {
+    public static void main(java.lang.String[]);
+}'
+
+mv leo.jar le.jar
+mv peo.jar pe.jar

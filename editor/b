@@ -1,0 +1,7 @@
+#!/bin/bash
+rm -f *.class
+
+if javac LevelEditor.java
+then
+	jar cvfm ../res/le.jar MANIFEST *class *.png
+fi

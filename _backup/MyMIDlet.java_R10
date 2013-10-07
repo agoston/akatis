@@ -1,0 +1,3390 @@
+import javax.microedition.lcdui.*;
+import javax.microedition.midlet.*;
+import javax.microedition.rms.*;
+import java.util.*;
+import java.io.*;
+
+/**********************************************************************************
+/* Misc. stuff
+/**********************************************************************************/
+final class Stuff {
+	public static final String readLine(InputStream is) throws IOException {
+		byte[] buf = new byte[4096];
+		int index = 0;
+		buf[index] = (byte)is.read();
+
+		for (;;) {
+			if (buf[index] < 0 || buf[index] == '\n') break;
+			buf[++index] = (byte)is.read();
+		}
+		return new String(buf, 0, index);
+	}
+
+	public static final int ln2(int in) {
+		int ret = -1;
+		for (; in != 0; ret++) in >>= 1;
+		return ret;
+	}
+
+	public static final int ln10(int in) {
+		if (in < 10) return 0;
+		if (in < 100) return 1;
+		if (in < 1000) return 2;
+		if (in < 10000) return 3;
+		if (in < 100000) return 4;
+		if (in < 1000000) return 5;
+		if (in < 10000000) return 6;
+		if (in < 100000000) return 7;
+		if (in < 1000000000) return 8;
+		return 9;
+	}
+
+	public static final int greatestPowerOfTen(int in) {
+		if (in < 10) return 0;
+		if (in < 100) return 10;
+		if (in < 1000) return 100;
+		if (in < 10000) return 1000;
+		if (in < 100000) return 10000;
+		if (in < 1000000) return 100000;
+		if (in < 10000000) return 1000000;
+		if (in < 100000000) return 10000000;
+		if (in < 1000000000) return 100000000;
+		return 1000000000;
+	}
+
+	public static final int sqrt(int v) {
+		int root = 0;
+		for (int d=0x10000000; d!=0; d>>=2) {	// root := 0.5*(root - v/root)
+			int t = root+d;
+			root>>=1;		// root = (prevroot + prevd) / 2
+			if (t<=v) {
+				v -= t;
+				root += d;
+			}
+		}
+		return root;
+	}
+	
+	// 3 feltetel, hogy a teljes ertekkeszleten vegigmenjen (donald knuth, 2 kotetbol):
+	// seed = (a * seed + c) mod m
+	// 1. c es m relativ primek
+	// 2. (a-1) = k*m, k>=1
+	// 3. (a-1) mod 4 = 0, ha m mod 4 = 0
+	public static int seed = 32767;
+	public static final int random16() {	// 16 bites random
+		seed = (458759*seed+71) & 65535;
+		return seed;
+	}
+	
+	// sin+cos: tablazattal
+	public final static int sin[] = {0, 1143, 2287, 3429, 4571, 5711, 6850, 7986, 9120, 10252, 11380, 12504, 13625, 14742, 15854, 16962, 18064, 19160, 20251, 21336, 22414, 23486,
+									24550, 25607, 26655, 27696, 28729, 29752, 30767, 31772, 32768, 33753, 34728, 35693, 36647, 37589, 38521, 39440, 40348, 41243, 42125, 42995,
+									43852, 44695, 45525, 46340, 47142, 47930, 48702, 49460, 50203, 50931, 51643, 52339, 53019, 53683, 54331, 54963, 55577, 56175, 56755, 57319,
+									57864, 58393, 58903, 59395, 59870, 60326, 60763, 61183, 61583, 61965, 62328, 62672, 62997, 63302, 63589, 63856, 64103, 64331, 64540, 64729,
+									64898, 65047, 65177, 65286, 65376, 65446, 65496, 65526, 65536};
+								
+	public static final int sin(int degree) {
+		if (degree >= 180) {
+			if (degree >= 270) {		// 269-359
+				return -sin[360-degree];
+			} else {					// 180-269
+				return -sin[degree-180];
+			}
+		} else {
+			if (degree >= 90) {			// 90-179
+				return sin[180-degree];
+			} else {					// 0-89
+				return sin[degree];
+			}
+		}
+	}
+
+	public static final int cos(int degree) {
+		if (degree >= 180) {
+			if (degree >= 270) {		// 269-359
+				return sin[degree-270];
+			} else {					// 180-269
+				return -sin[270-degree];
+			}
+		} else {
+			if (degree >= 90) {			// 90-179
+				return -sin[degree-90];
+			} else {					// 0-89
+				return sin[90-degree];
+			}
+		}
+	}
+}
+
+/**********************************************************************************
+/* MAIN
+/**********************************************************************************/
+final class MyCanvas extends Canvas implements Runnable {
+
+	// optme: mindenhol konstansra beirni a kepek mereteit!
+	// optme: pleft + ptop atnezese, kiikatatasa
+	static final int STATE_START = 0;
+	static final int STATE_MENU_IN = 1;
+	static final int STATE_MENU_DOOR_OUT = 7;
+	static final int STATE_MENU = 2;
+	static final int STATE_MENU_UPGRADE_OPEN = 9;
+	static final int STATE_MENU_UPGRADE = 11;
+	static final int STATE_MENU_UPGRADE_CLOSE = 10;
+	static final int STATE_MENU_DOOR_IN = 8;
+	static final int STATE_MENU_TO_GAME = 3;
+	static final int STATE_GAME = 4;
+	static final int STATE_GAME_TOP_IN = 12;
+	static final int STATE_GAME_TOP_OUT = 13;
+	static final int STATE_GAME_TO_MENU = 5;
+	static final int STATE_MENU_OUT = 6;
+	static final int STATE_WEAPONINFO_IN = 14;
+	static final int STATE_WEAPONINFO_OUT = 15;
+	static final int STATE_NOT_ENOUGH_MONEY = 16;
+	static final int STATE_DISSOLVE = 17;
+    static final int STATE_MENU_TO_SCORES = 18;
+    static final int STATE_SCORES = 19;
+    static final int STATE_SCORES_TO_MENU = 20;
+    static final int STATE_MENU_TO_STORY = 21;
+    static final int STATE_STORY = 22;
+    static final int STATE_STORY_NEXT_PAGE = 23;
+    static final int STATE_STORY_TO_GAME = 24;
+    static final int STATE_GAME_TO_STORY = 25;
+    static final int STATE_STORY_TO_MENU = 26;
+    static final int STATE_GAME_LEVEL_END = 27;
+    static final int STATE_EXIT = 28;
+	static int state, nextState;
+	
+	public static Display myDisplay;
+	public static MyMIDlet myMIDlet;
+	static final int shipSpeed = 64, extraGunSpeed = 48;
+	static final int maxBGShift = 16;
+	static final int maxShipSlideTime = 192;
+    
+	static int scrX, scrY, pleft, pright, ptop, pbottom;
+	static int fShipX, fShipY, fShipSlidePos, fShipLimitX, fShipLimitY, shipHP, shipPrevHP, shipSlideTime, shipDestroyTime, shipFrostTime;
+	static int shipWeaponFront=0, shipWeaponBack = -1, shipWeaponShield = -1, shipWeaponExtra = -1;
+	static int fExtraGunX, fExtraGunY;
+	static int shipFrontFired, shipBackFired, shipExtraFired;
+	static boolean shipWeaponFrontDualLeft, shipWeaponBackDualLeft, shipWeaponExtraLeft = false;
+	static int pwidth, pheight, pmiddle, penwidth, penmiddle;
+	static int vscrl, vscrr, vscrdelta, maxvscrdelta, fMaxBGSpeed, fEnemyBGSpeed, fMaxEnShift, fenshift, enbgpos;
+	static int tileHeightToDraw;
+	
+	static long levelStartTime;
+	static int lastFrameTime, accFrameTime, lastFrameStart, actFrameStart;
+	static int fAccBGPos;
+	
+	static Image[] bgImages;
+	static int[] bgWidth, bgHeight;
+	static Drawable[] bgLayers;
+
+	static Enemy[] enemies;
+	static Image[] enemyImages = new Image[32];
+	// TODO: enemymereteket static final-ba rakni (speedup/size)
+	static final int[] enWidth = new int[32];// = {15, 17, 28, 28, 29, 25, 33, 18, 19, 20, 20};
+	static final int[] enHeight = new int[32];// = {14, 14, 25, 24, 29, 29, 25, 18, 16, 25, 25};
+	static final int[] fenWidth = new int[32];// = {15<<8, 17<<8, 28<<8, 28<<8, 29<<8, 25<<8, 33<<8, 18<<8, 19<<8, 20<<8, 20<<8};
+	static final int[] fenHeight = new int[32];// = {14<<8, 14<<8, 25<<8, 24<<8, 29<<8, 29<<8, 25<<8, 18<<8, 16<<8, 25<<8, 25<<8};
+	//static final int[] enSpeed = {32, 32, 32, 32, 16, 16, 16, 16, 20, 128, 4, 20};
+    static final int[] enExpl = {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0};
+    static final int explSize = 32, fExplSize = 32<<8;
+	static int enBegin = 0;
+	
+	static final Image[] bulletImages = new Image[37];
+	// TODO: bulletmereteket static final-ba rakni (speedup/size)
+	static final int[] bulletHeight = new int[37];
+	static final int[] bulletWidth = new int[37];
+	static final int[] fBulletHeight = new int[37];
+	static final int[] fBulletWidth = new int[37];
+	static final Bullet[] bullets = new Bullet[64];
+	static int bulletLast = 0;
+	static final int[] weaponRate = {128, 64, 128, 180, 160, 160, 150, 150, 150, 160, 160, 160, 256, 128, 512, 256};
+	static final int[] weaponPrice = {100, 200, 300, 200, 400, 600, 500, 1000, 1500, 1000, 2000, 3000, 500, 1000, 2500, 5000,
+										1500, 3000, 1500, 3000, 4500};	//shield, extragun
+	static final int[] weaponPower = {1, 2, 3, 2, 3, 4, 3, 4, 5, 5, 6, 7, 2, 4, 4, 5};
+	static final int[] extraGunVerticalTilt = {2<<8, 3<<8, 3<<8};
+	static final int[] bulletFrameNum =	{	1, 3, 2, 2, 3, 3, 3, 3, 3, 3,
+											3, 1, 1, 1, 1, 1, 1, 1, 3, 3,
+											3, 3, 3, 3, 3, 3, 3, 3, 3, 1,
+											1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+	
+	static Image[] explosionImages;
+
+	static Image shipImage;
+	static final int shipWidth = 20, shipHeight = 20, fShipWidth = 20<<8, fShipHeight = 20<<8;
+	
+	static Path[] pathes;
+
+	static Image numberImage;
+	static final int[] numberWidth = {6, 6, 7, 6, 8, 6, 6, 7, 7, 6};
+	static final int[] numberStart = {0, 6, 12, 19, 25, 33, 39, 45, 52, 59};
+	static final int numberHeight = 5;
+	
+	static Image fontImage;
+    static final char[] fontChar = {' ', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+                                    '.', ',', '!', '?', ':', ';', '-', '/', '"', '\'', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
+	static final int[] fontWidth = {3, 8, 7, 8, 8, 7, 7, 8, 8, 5, 5, 7, 6, 9, 8, 9, 7, 9, 6, 7, 7, 8, 7, 11, 7, 7, 7, 
+                                    3, 3, 3, 6, 3, 4, 5, 6, 6, 4, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7};
+	static final int[] fontStart = {0, 3, 11, 18, 26, 34, 41, 48, 56, 64, 69, 74, 81, 87, 96, 104, 113, 120, 129, 135, 142, 149, 157, 164, 175, 182, 189,
+                                    196, 199, 202, 205, 211, 214, 218, 223, 229, 235, 239, 246, 253, 260, 267, 274, 281, 288, 296, 303};
+	static final int fontHeight = 8, fontSpaceWidth = 3;
+
+	// top
+	static Image topBorder, topLives, topScore;
+	static int topScorePos, topLivesPos, topBorderPos;
+	
+	// bottom
+	static Image bottomLeftDisplay, bottomRightDisplay, bottomBorder;
+	static int bottomLeftDisplayPos, bottomRightDisplayPos, bottomBorderPos;
+	static Image bottomNext, bottomPrev, bottomOK, bottomHP;
+	static int bottomLeftIconPos, bottomRightIconPos;
+	
+	// sizes
+	static final int topBorderSize = 5, bottomBorderSize=18, leftDoorSize=71, rightDoorSize=57, weaponInfoHeight=33, topInfoHeight = 11;
+	static final int topInfoLivesWidth = 37;
+
+	// menu
+	static int accMenuTime;
+	static Image menuBG, menuBGAct, doorImage;
+	static int leftDoorPos, rightDoorPos, weaponInfoPos;
+	static Image upgradeBG, weaponInfoImage;
+    static Image startImage;
+	
+	static int menuParent;
+	static int menuSelect, menuOffset;
+	static final int[] menu = {	0, 1, 2, 3, 4,			// 0	game, settings, help, about, exit
+								5, 6, 7, 8, -1,			// 5	new, continue, scores, back
+								9, 10, 11, 12, 8,		// 10	start, ship, upgrade, tutorial, back
+								13, 14, 15, 16, 8,		// 15	uct l, uct h, rtn l, rtn h
+								17, 18, 19, 20, 8,		// 20	front, rear, shield, extra, back
+								21, 22, 23, 24, 8,		// 25	next, prev, buy, sell, back
+								25, 26, 27, 28, 8,		// 30	particle, sound, music, vibration
+                                -1};
+			
+	static final int[] menuJump = {	5,	30,	-1,	-1,	-1,
+									10,	-1,	-1,	0,	-1,
+									-1,	15,	20,	-1,	5,
+									-1,	-1,	-1,	-1,	10,
+									25,	25,	25,	25,	10,
+									-1,	-1,	-1,	-1,	20,
+									-1, -1, -1, -1, 0};
+	
+	static String[] messages;
+	static EnemyType[] entypes = null;
+	static int messageID, messageTime = -1;
+	static final int weaponNameIndex = 30;
+	static final int gameMessageIndex = 39;
+	static final int storyMessageIndex = 41;
+	
+	static int shipBlinkingTime = -1;
+	static Random random = null;
+
+	static int[] particlefXPos, particlefYPos;
+	static int[] particlefSpeed, particlefTime;
+	static int[] particleAngle;
+
+	static int score = 16000, actScore = 0, levelNum = 0, levelNumHPScore = 0;
+    static int shopWeaponFront, shopWeaponBack, shopWeaponShield, shopWeaponExtra;
+	static Image shopNumberImage;
+	static final int[] shopNumberWidth = {8, 7, 7, 6, 6, 7, 7, 7, 7, 7};
+	static final int[] shopNumberStart = {0, 8, 15, 21, 27, 34, 41, 48, 55, 62};
+	static final int shopNumberHeight = 7;
+	
+	static final int[] shieldBulletIndex = new int[2];
+    static boolean isDirty = false;
+    
+    static final String[] highScoreNames = new String[8];
+    static final int[] highScores = new int[8];
+    
+    static int[] storyPageIndex = new int[32];
+    static int actStory = storyMessageIndex, actStoryPage = 0, prevStoryPage = 0, lastStoryPage = Integer.MAX_VALUE;   //FIXME: ezeket reinit story-ba belepeskor
+    static int storyMargin = 4, storyWidth;
+	
+    static int prevMainEnemyHP = -1;
+    static Enemy mainEnemy = null;
+    static boolean scrollLevel = true;
+    static int[] meDestroyTime = null, meDestroyX = null, meDestroyY = null;
+    
+	// TODO: konstruktorbol inicializalni egy halom objektumot, amik folyamatosan a memoriaban lesznek
+	public MyCanvas() {
+		scrX = 128;//getWidth();
+		scrY = 128;//getHeight();
+		pleft = 0;
+		pright = 128;
+		ptop = topBorderSize;
+		pbottom = scrY - bottomBorderSize;
+		
+		pwidth = pright-pleft;
+		pheight = pbottom-ptop;
+		pmiddle = (pleft+pright)/2;
+
+		tileHeightToDraw = ((pheight+128)>>5);
+		if ((pheight & 0x1f) > 0) tileHeightToDraw++;
+		
+		vscrl = (pwidth>>1) - 96;
+		vscrr = (pwidth>>1) + 96;
+
+		shieldBulletIndex[0] = shieldBulletIndex[1] = -1;
+        storyWidth = scrX - (2*storyMargin);
+
+	}
+	
+/**********************************************************************************
+/* LOAD
+/**********************************************************************************/
+	public void loadStatic() {
+		// load all-time-needed images
+		try {
+			// intl messages
+			Vector v = new Vector(20,10);
+			InputStream is = getClass().getResourceAsStream("/intl");
+		
+			for (int i = 0; ; i++) {
+				String imageFile = Stuff.readLine(is);
+				if (imageFile.length() == 0) break;
+				if (imageFile.charAt(0) == '#') continue;
+				v.addElement(imageFile);
+			}
+			messages = new String[v.size()];
+			v.copyInto(messages);
+			
+			// ship images
+			shipImage = Image.createImage("/pl.png");
+			
+			// bullets
+			for (int i = 0; i < bulletImages.length; i++) {
+				bulletImages[i] = Image.createImage("/en/b"+(i/10)+(i%10)+".png");
+				bulletWidth[i] = bulletImages[i].getWidth()/bulletFrameNum[i];
+				bulletHeight[i] = bulletImages[i].getHeight();
+				fBulletWidth[i] = bulletWidth[i]<<8;
+				fBulletHeight[i] = bulletHeight[i]<<8;
+			}
+
+			// number & font images
+			fontImage = Image.createImage("/font.png");
+			numberImage = Image.createImage("/num.png");
+
+			// bottom images
+			bottomLeftDisplay = Image.createImage("/bottom_1.png");
+			bottomBorder = Image.createImage("/bottom_2.png");
+			bottomRightDisplay = Image.createImage("/bottom_3.png");
+			
+			// top images
+			topBorder = Image.createImage("/top.png");
+			topLives = Image.createImage("/top_live.png");
+			topScore = Image.createImage("/top_score.png");
+		
+			// random
+			random = new Random();
+			
+            // high score
+            loadHighScore();
+            
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+	
+	public void loadLevel(int levelNum) {
+		try {
+			// enemy types
+			if (entypes == null) entypes = new EnemyType[64];
+			InputStream is = getClass().getResourceAsStream("/entypes");
+			String actLine = Stuff.readLine(is);
+			for (int i = 0; actLine != null && actLine.length() > 0; actLine = Stuff.readLine(is), i++) {
+				if (actLine.startsWith("#")) {
+					i--;
+					continue;
+				}
+				String[] sp = new String[8];
+				int actIndex = 0, spInd = 0;
+				StringBuffer acts = new StringBuffer();
+				
+				while (spInd < 8) {
+					char actc = actIndex < actLine.length() ? actLine.charAt(actIndex) : ',';
+					if (actc == ',') {
+						sp[spInd++] = acts.toString();
+						acts.setLength(0);
+					} else {
+						acts.append(actc);
+					}
+					actIndex++;
+				}
+				int[] isp = new int[sp.length];
+				for (int j = 0; j < sp.length; j++) isp[j] = Integer.parseInt(sp[j].trim());
+
+				entypes[i] = new EnemyType(isp[0], isp[1], isp[2], isp[3], isp[4], isp[5], isp[6], isp[7]);
+			}
+			
+			// images
+			Vector v = new Vector(20,10);
+			is = getClass().getResourceAsStream("/l"+levelNum+"trl");
+		
+			for (int i = 0; ; i++) {
+				String imageFile = Stuff.readLine(is);
+				if (imageFile.length() <= 1) break;
+				v.addElement(Image.createImage(imageFile));
+			}
+			bgImages = new Image[v.size()];
+			v.copyInto(bgImages);
+			
+			bgWidth = new int[bgImages.length];
+			bgHeight = new int[bgImages.length];
+			for (int i = 0; i < bgImages.length; i++) {
+				bgWidth[i] = bgImages[i].getWidth();
+				bgHeight[i] = bgImages[i].getHeight();
+			}
+		
+			// pathes
+			if (pathes == null) {
+				is = getClass().getResourceAsStream("/p");
+				int pNum = is.read();
+				pathes = new Path[pNum];
+				for (int i = 0; i < pNum; i++) {
+					int len = is.read();
+					Path actpath = new Path(len);
+					pathes[i] = actpath;
+					for (int j = 0; j < len; j++) {
+						actpath.x[j] = is.read();
+						actpath.y[j] = is.read();
+						actpath.speed[j] = is.read();
+						actpath.speed[j] += is.read()<<8;
+						actpath.wait[j] = is.read();
+						actpath.wait[j] += is.read()<<8;
+					}
+					actpath.init();
+				}
+			}
+			
+			// level layers
+			is = getClass().getResourceAsStream("/l"+levelNum);
+			int bgNum = is.read();
+			bgLayers = new Drawable[bgNum];
+			for (int i = 0; i < bgNum; i++) {
+				int len = is.read();
+				if (len == -1) break;
+				len += is.read()<<8;
+
+				int speed = is.read();
+				speed += is.read()<<8;
+				if (speed > fMaxBGSpeed) fMaxBGSpeed = speed;
+				fEnemyBGSpeed = speed;
+				
+				int stretch = is.read();
+
+				byte[] bg = new byte[len];
+				is.read(bg);
+
+				switch (stretch) {
+					case 0:
+						bgLayers[i] = new CenteredLevelLayer(bg, speed); break;
+					case 1:
+						bgLayers[i] = new RepeatedLevelLayer(bg, speed); break;
+					case 2:
+						bgLayers[i] = new JustifiedLevelLayer(bg, speed); break;
+				}
+			}
+			maxvscrdelta = (maxBGShift<<16)/fMaxBGSpeed;
+			fMaxEnShift = maxBGShift*((fEnemyBGSpeed<<8)/fMaxBGSpeed);
+			penwidth = pwidth+((fMaxEnShift)>>7);
+			penmiddle = penwidth>>1;
+			// propagaljuk - eleg szerencsetlen, de meg mindig a legkisebb eroforrasugenyu
+			for (int i = 0; i < bgLayers.length; i++)
+				if (bgLayers[i] instanceof JustifiedLevelLayer)
+					((JustifiedLevelLayer)bgLayers[i]).postInit();
+			
+			// enemies
+			int enNum = is.read();
+			enemies = new Enemy[enNum];
+			for (int i = 0; i < enNum; i++) {
+				int enTypeNum = is.read();
+				int bgPos = is.read();
+				bgPos += is.read()<<8;
+
+				if (enTypeNum < 64) {
+					EnemyType entype = entypes[enTypeNum];
+					int type = entype.imageNum;
+					int path = is.read();
+					int dx = is.read();
+					int dy = is.read();
+
+					enemies[i] = new Enemy(type, bgPos, path, dx, dy, entype);
+					
+					// images
+					if (enemyImages[type] == null) {
+						enemyImages[type] = Image.createImage("/en/e"+(type/10)+(type%10)+".png");
+                        enWidth[type] = enemyImages[type].getWidth()>>1;
+                        // FIXME! Ganyolas zolinak
+                        if (type == 9 || type == 10) enWidth[type] = 20;
+                        enHeight[type] = enemyImages[type].getHeight();
+                        fenHeight[type] = enHeight[type]<<8;
+                        fenWidth[type] = enWidth[type]<<8;
+					}
+				} else {
+					switch (enTypeNum) {
+						case 64:	{
+							byte[] t = new byte[2];
+							t[0] = (byte)is.read();
+							t[1] = (byte)is.read();
+							enemies[i] = new Enemy(enTypeNum, bgPos, t);
+							break;
+						}
+						
+						case 66: {
+							byte[] t = new byte[bgNum*2];
+							for (int l = 0; l < t.length; l++) t[l] = (byte)is.read();
+							enemies[i] = new Enemy(enTypeNum, bgPos, t);
+							break;
+						}
+						
+						default:
+							enemies[i] = new Enemy(enTypeNum, bgPos, null);
+					}
+				}
+			}
+			
+			// explosion images
+			if (explosionImages == null) {
+				explosionImages = new Image[3];
+				for (int i = 0; i < 3; i++) {
+					explosionImages[i] = Image.createImage("/ex"+i+".png");
+				}
+			}
+			
+			if (bottomHP == null) {
+				bottomHP = Image.createImage("/bottom_3_hp.png");
+			}
+			
+			// particle
+			particlefXPos = new int[64];
+			particlefYPos = new int[64];
+			particlefSpeed = new int[64];
+			particlefTime = new int[64];
+			particleAngle = new int[64];
+			
+			
+		} catch (Exception e) {	// TODO: delete this
+			e.printStackTrace();
+		}
+	}
+
+	public static void disposeLevel() {
+		bgLayers = null;
+		bgImages = null;
+		bgWidth = null;
+		bgHeight = null;
+		enemies = null;
+		enemyImages = new Image[16];
+		pathes = null;
+		explosionImages = null;
+		bottomHP = null;
+		entypes = null;
+		particlefXPos = particlefYPos = particlefSpeed = particlefTime = particleAngle = null;
+	}
+
+	public static void loadMenu() {
+		try {
+			// menu images
+			if (menuBG == null) {
+				menuBG = Image.createImage("/m.png");
+				menuBGAct = Image.createImage("/mact.png");
+				doorImage = Image.createImage("/door.png");
+			}
+
+			// bottom menuimages
+			if (bottomNext == null) {
+				bottomNext = Image.createImage("/bottom_3_next.png");
+				bottomPrev = Image.createImage("/bottom_1_back.png");
+				bottomOK = Image.createImage("/bottom_3_ok.png");
+			}
+			
+			// upgrade Images
+			if (upgradeBG == null) {
+				upgradeBG = Image.createImage("/door_space.png");
+				weaponInfoImage = Image.createImage("/winf.png");
+				shopNumberImage = Image.createImage("/wfont.png");
+			}
+            
+            if (startImage == null) {
+				startImage = Image.createImage("/start.png");
+            }
+			
+		} catch (Exception e) {	// TODO: delete this
+			e.printStackTrace();
+		}
+	}
+	
+	public static void disposeMenu() {
+		menuBG = menuBGAct = doorImage = null;
+		bottomNext = bottomPrev = bottomOK = null;
+		upgradeBG = weaponInfoImage = shopNumberImage = null;
+        startImage = null;
+	}
+
+/**********************************************************************************
+/* MOVE
+/**********************************************************************************/
+	public void init() {
+        // ora start
+        levelStartTime = System.currentTimeMillis();
+		actFrameStart = 0;
+        state = STATE_START;
+        accMenuTime = -1;
+
+		//initLevel(0);
+		//state = STATE_GAME;
+		
+        // enter main cycle
+		run();
+	}
+
+    static void saveGame() {
+        try {
+            RecordStore actrs = RecordStore.openRecordStore("game", true);
+            
+            try {
+                actrs.deleteRecord(1);
+            } catch (RecordStoreException e) {}
+            
+            byte[] data = (fAccBGPos > 0) ? new byte[14] : new byte[7];
+            
+            data[0] = (byte)levelNum;
+            data[1] = (byte)((score>>8) & 0xff);
+            data[2] = (byte)(score & 0xff);
+            data[3] = (byte)(shipWeaponFront);
+            data[4] = (byte)(shipWeaponBack);
+            data[5] = (byte)(shipWeaponShield);
+            data[6] = (byte)(shipWeaponExtra);
+            
+            if (fAccBGPos > 0) {
+                data[7] = (byte)((fAccBGPos>>24)&0xff);
+                data[8] = (byte)((fAccBGPos>>16)&0xff);
+                data[9] = (byte)((fAccBGPos>>8)&0xff);
+                data[10] = (byte)(fAccBGPos&0xff);
+                data[11] = (byte)(shipHP);
+                data[12] = (byte)((actScore>>8)&0xff);
+                data[13] = (byte)(actScore&0xff);
+            }
+            
+            actrs.addRecord(data, 0, data.length);
+            actrs.closeRecordStore();
+            
+        } catch (RecordStoreException e) {}
+    }
+    
+    static void loadGame() {
+        byte[] data = null;
+        try {
+            RecordStore actrs = RecordStore.openRecordStore("game", false);
+            data = actrs.getRecord(1);
+            actrs.closeRecordStore();
+        } catch (RecordStoreException e) {}
+        
+        if (data != null) {
+            levelNum = data[0];
+            score = (data[1]<<8)+data[2];
+            shipWeaponFront = data[3];
+            shipWeaponBack = data[4];
+            shipWeaponShield = data[5];
+            shipWeaponExtra = data[6];
+            
+            if (data.length > 7) {
+                fAccBGPos = (data[7]<<24)+(data[8]<<16)+(data[9]<<8)+data[10];
+                shipHP = data[11];
+                actScore = (data[12]<<8)+data[13];
+            }
+        }
+    }
+    
+    static void loadHighScore() {
+        byte[] data = null;
+        try {
+            RecordStore actrs = RecordStore.openRecordStore("hs", false);
+            data = actrs.getRecord(1);
+            actrs.closeRecordStore();
+        } catch (RecordStoreException e) {}
+        
+        if (data != null) {
+            for (int i = 0; i < data.length/10; i++) {
+                highScoreNames[i] = new String(data, i*10, 8);
+                highScores[i] = (data[i*10+8]<<8)+data[i*10+9];
+            }
+        } else {
+            highScoreNames[0] = "ghost";
+            highScores[0] = 10000;
+            highScoreNames[1] = "barrage";
+            highScores[1] = 8000;
+            highScoreNames[2] = "sam";
+            highScores[2] = 6000;
+        }
+    }
+
+    static void saveHighScore() {
+        try {
+            RecordStore actrs = RecordStore.openRecordStore("hs", true);
+            
+            try {
+                actrs.deleteRecord(1);
+            } catch (RecordStoreException e) {}
+            
+            int recnum = 0;
+            while (recnum < 8 && highScoreNames[recnum] != null) recnum++;
+            
+            byte[] data = new byte[recnum*10];
+            for (int i = 0; i < recnum; i++) {
+                byte[] actname = highScoreNames[i].getBytes();
+                System.arraycopy(actname, 0, data, i*10, actname.length);
+                data[i*10+8] = (byte)((highScores[i]>>8)&0xff);
+                data[i*10+9] = (byte)((highScores[i])&0xff);
+            }
+            
+            actrs.addRecord(data, 0, data.length);
+            actrs.closeRecordStore();
+            
+        } catch (RecordStoreException e) {}
+    }
+
+    void initLevel(int num) {
+        levelNum = num;
+        levelNumHPScore = (num+1)*1000;
+		loadLevel(num);
+		
+		// reinit level-dependent values
+		accFrameTime = 0;
+		fAccBGPos = 0;
+		enBegin = 0;
+		fShipLimitX = (penwidth-shipWidth)<<8;
+		fShipLimitY = (pheight-shipHeight)<<8;
+		fShipX = fShipLimitX/2;
+		fShipY = fShipLimitY;
+		if (shipWeaponExtra >= 0) {
+			fExtraGunX = fShipX+fShipWidth;
+			fExtraGunY = fShipY+fShipHeight-fBulletHeight[15+shipWeaponExtra]-extraGunVerticalTilt[shipWeaponExtra];
+		}
+		shipHP = 100;
+        shipPrevHP = -1;    // egyszer rakja ki
+        mainEnemy = null;
+        meDestroyTime = meDestroyX = meDestroyY = null;
+        prevMainEnemyHP = -1;
+        scrollLevel = true;
+        actScore = 0;
+		shipFrontFired = shipBackFired = 0;
+		vscrdelta = 0;
+		shipSlideTime = maxShipSlideTime/2;
+        shipDestroyTime = -1;
+        shipFrostTime = -1;
+		for (int i = 0; i < bullets.length; i++) bullets[i] = null;
+		initShield(shipWeaponShield);
+		levelStartTime = System.currentTimeMillis();
+		actFrameStart = 0;
+		messageID = 1+gameMessageIndex;
+		messageTime = shipBlinkingTime = 2*256;
+		movePlayer(1, 1, 0);	// init shift values
+	}
+	
+	static final void initShield(int num) {
+		//System.out.println("initshield "+num);
+		for (int i = 0; i <= num; i++) {
+			if (shieldBulletIndex[i] < 0 || bullets[shieldBulletIndex[i]] == null) {
+				int index = 0;
+				while (bullets[index] != null) index++;
+				shieldBulletIndex[i] = index;
+				
+				int angle = i*180;
+				if (i != 0) {
+					angle = bullets[shieldBulletIndex[i-1]].angle+180;
+					if (angle >= 360) angle -= 360;
+				}
+				bullets[index] = new Bullet(false, -10000, -10000, angle, 0, 14, 100);
+
+				index++;
+				if (bulletLast < index) bulletLast = index;
+			}
+		}
+		
+		num++;
+		
+		for (int i = num; i < 2; i++) {
+			if (shieldBulletIndex[i] >= 0) {
+				bullets[shieldBulletIndex[i]] = null;
+				shieldBulletIndex[i] = -1;
+			}
+		}
+		//System.out.println(" > "+shieldBulletIndex[0]+", "+shieldBulletIndex[1]);
+	}
+    
+    static final void initStory(int story) {
+        actStory = storyMessageIndex+story; actStoryPage = 0; prevStoryPage = 0; lastStoryPage = Integer.MAX_VALUE;
+    }
+	
+	public void run() {
+		// idoszamitas
+		lastFrameStart = actFrameStart;
+		actFrameStart = (int)(System.currentTimeMillis()-levelStartTime);
+		lastFrameTime = (actFrameStart - lastFrameStart + 2)>>2;
+		if (lastFrameTime > 32) lastFrameTime = 32;		// 8 fps alatt lassul a jatek
+		//try {Thread.sleep(200);} catch (Exception e) {}
+		//lastFrameTime = 64;
+		if (scrollLevel) accFrameTime += lastFrameTime;
+
+		// **********************************************************************************************************
+		if (state == STATE_GAME) {
+			int unslideTime = lastFrameStart;
+
+			// input eventek lekezelese
+			// TODO: synch nem kell, ha serially() fut
+			// TODO: ha alacsony fps-nel rossz/lassu az event handler, annak az az oka, hogy a canvas event handler thread-je sorosan hajtja vegre az eventeket - a paint(), key*(), es a run() -t is! Kulon thread kell, az talan javit rajta valamennyit
+			synchronized(ehie) {
+				int num = ehSize();
+				for (int i = 0; i < num; i++) {
+					InputEvent ie = ehNext();
+					int length = ie.length;
+
+					// nem iranyitott ido kezelese
+					if (unslideTime < actFrameStart) {
+						int t = (ie.start-unslideTime)>>2;
+						if (t > 0) 	unslidePlayer(t);
+
+						if (length < 0) {
+							unslideTime = actFrameStart;
+						} else {
+							unslideTime = ie.start+ie.length;
+						}
+					}
+
+					if (length < 0) {	// kiszamoljuk, visszarakjuk
+						length = (actFrameStart-ie.start);
+						ie.start = actFrameStart;
+						ehAdd(ie);
+					}
+
+					length >>= 2;	// millisec -> s/256, kozelitoleg, de le van xarva
+
+					if (shipFrostTime < 0 && shipDestroyTime < 0) {
+                        switch (ie.key) {
+                            case Canvas.UP: 
+                                movePlayer(0, -1, length); break;
+
+                            case Canvas.DOWN:
+                                movePlayer(0, 1, length); break;
+
+                            case Canvas.LEFT:
+                                movePlayer(-1, 0, length); break;
+
+                            case Canvas.RIGHT: 
+                                movePlayer(1, 0, length); break;
+
+                            case Canvas.FIRE:
+                                if (!ie.repeated) shipWeaponExtraLeft = !shipWeaponExtraLeft;
+                                break;
+                        }
+                    }
+					
+					ie.repeated = true;
+				}
+			}
+
+			// ha nem nyomott semmit, unslide az egesz, meg ha maradt meg ido a frame vegen, akkor is
+			if (unslideTime < actFrameStart) unslidePlayer((actFrameStart-unslideTime)>>2);
+            if (shipFrostTime >= 0) shipFrostTime -= lastFrameTime;
+
+		// **********************************************************************************************************
+		} 
+
+		repaint();
+		myDisplay.callSerially(this);
+
+		try {Thread.sleep(2);} catch (Exception e) {}
+	}
+	
+	static void movePlayer(int x, int y, int elapsedTime) {
+		if (x != 0) {
+			fShipX += x*shipSpeed*elapsedTime;
+			if (fShipX < 0) fShipX = 0;
+			if (fShipX > fShipLimitX) fShipX = fShipLimitX;
+			
+			vscrdelta = (((fShipX*((maxvscrdelta<<17)/fShipLimitX))+32768)>>16);
+			fenshift = (((vscrdelta*fEnemyBGSpeed)+128)>>8);
+			vscrdelta = maxvscrdelta - vscrdelta;
+			//System.out.println(""+vscrdelta+", "+maxvscrdelta+", "+fShipX);
+
+			shipSlideTime += x*elapsedTime;
+			if (shipSlideTime > maxShipSlideTime) shipSlideTime = maxShipSlideTime;
+			if (shipSlideTime < 0) shipSlideTime = 0;
+			//System.out.println("move: "+shipSlideTime);
+		}
+		
+		if (y != 0) {
+			fShipY += y*shipSpeed*elapsedTime;
+			if (fShipY < 0) fShipY = 0;
+			if (fShipY > fShipLimitY) fShipY = fShipLimitY;
+		}
+	}
+
+	static void unslidePlayer(int elapsedTime) {
+		if (shipSlideTime > maxShipSlideTime/2) {
+			shipSlideTime -= elapsedTime;
+			if (shipSlideTime < maxShipSlideTime/2) shipSlideTime = maxShipSlideTime/2;
+		} else {
+			shipSlideTime += elapsedTime;
+			if (shipSlideTime > maxShipSlideTime/2) shipSlideTime = maxShipSlideTime/2;
+		}
+		//System.out.println("unslide: "+shipSlideTime);
+	}
+	
+	static void fireWeapon(boolean enemy, int fx, int fy, int type) {
+		//System.out.println("Shoot! "+(fx>>8)+", "+(fy>>8)+", "+type);
+		int nextInd = 0;
+		while (bullets[nextInd] != null) nextInd++;
+
+		switch (type) {
+			/************************************** VULCAN */
+			case 0:
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 90, 96, 0, 10);
+				break;
+				
+			case 1:
+				if (shipWeaponFrontDualLeft) {
+					bullets[nextInd] = new Bullet(enemy, fx-(4<<8), fy+(3<<8), 90, 96, 0, 10);
+				} else {
+					bullets[nextInd] = new Bullet(enemy, fx+(4<<8), fy+(3<<8), 90, 96, 0, 10);
+				}
+				shipWeaponFrontDualLeft = !shipWeaponFrontDualLeft;
+				break;
+				
+			case 2:
+				bullets[nextInd] = new Bullet(enemy, fx-(4<<8), fy, 120, 96, 0, 20);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx   , fy, 90, 96, 0, 20);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(4<<8), fy, 60, 96, 0, 20);
+				break;
+
+			/************************************** ICE */
+			case 3:
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 90, 60, 5, 20);
+				break;
+
+			case 4:
+				bullets[nextInd] = new Bullet(enemy, fx-(6<<8), fy, 90, 65, 5, 25);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(6<<8), fy, 90, 65, 5, 25);
+				break;
+
+			case 5:
+				bullets[nextInd] = new Bullet(enemy, fx-(4<<8), fy, 180, 55, 7, 40);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx       , fy, 90, 70, 8, 15);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(4<<8), fy, 0, 70, 6, 15);
+				break;
+
+			/************************************** FIRE */
+			case 6:
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 90, 70, 1, 30);
+				break;
+
+			case 7:
+				bullets[nextInd] = new Bullet(enemy, fx-(6<<8), fy, 90, 70, 1, 35);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(6<<8), fy, 90, 70, 1, 35);
+				break;
+
+			case 8:
+				bullets[nextInd] = new Bullet(enemy, fx-(4<<8), fy, 135, 65, 3, 50);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx       , fy, 90, 70, 4, 25);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(4<<8), fy, 45, 70, 2, 25);
+				break;
+
+			/************************************** WAVE */
+			case 9:
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 90, 85, 9, 45);
+				break;
+
+			case 10:
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 90, 85, 10, 60);
+				break;
+
+			case 11:
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 90, 85, 11, 75);
+				break;
+
+			/************************************** BACK */
+			case 12:
+				bullets[nextInd] = new Bullet(enemy, fx, fy+(shipHeight<<8), 270, 40, 12, 20);
+				break;
+
+			case 13:
+				if (shipWeaponBackDualLeft) {
+					bullets[nextInd] = new Bullet(enemy, fx, fy+((shipHeight-3)<<8), 300, 45, 12, 30);
+				} else {
+					bullets[nextInd] = new Bullet(enemy, fx, fy+((shipHeight-3)<<8), 240, 45, 12, 30);
+				}
+				shipWeaponBackDualLeft = !shipWeaponBackDualLeft;
+				break;
+
+			case 14:
+				bullets[nextInd] = new Bullet(enemy, fx, fy+(shipHeight<<8), 270, 50, 13, 40);
+				break;
+
+			case 15:
+				bullets[nextInd] = new Bullet(enemy, fx, fy+(shipHeight<<8), 270, 50, 13, 50);
+				break;
+
+			/************************************** ENEMY - KEKPLAZMA */
+            case 16:
+				bullets[nextInd] = new Bullet(enemy, fx-(3<<8), fy, 225, 60, 20, 2);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx-(1<<8), fy, 255, 60, 18, 2);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(1<<8), fy, 285, 60, 18, 2);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(3<<8), fy, 315, 60, 23, 2);
+                break;
+
+            case 17:
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 270, 80, 19, 16);
+                break;
+        
+            case 18:
+				bullets[nextInd] = new Bullet(enemy, fx-(3<<8), fy, 225, 60, 20, 6);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx-(1<<8), fy, 255, 60, 18, 6);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(1<<8), fy, 285, 60, 18, 6);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(3<<8), fy, 315, 60, 23, 6);
+				while (bullets[nextInd] != null) nextInd++;
+                fy -= 8<<8;
+				bullets[nextInd] = new Bullet(enemy, fx-(3<<8), fy, 135, 50, 21, 6);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(3<<8), fy, 45, 50, 22, 6);
+                break;
+                
+			/************************************** ENEMY - RAKETA */
+            case 19:
+                fy -= 6<<8;
+				bullets[nextInd] = new Bullet(enemy, fx-(5<<8), fy, 270, 50, 24, 10);
+                bullets[nextInd].fPhase = 0;
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(5<<8), fy, 270, 50, 24, 10);
+                bullets[nextInd].fPhase = 90<<8;
+                break;
+
+            case 20:
+                fy -= 6<<8;
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 244+(random.nextInt()&63), 96, 24, 6);
+                break;
+
+            case 21:
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 270, 65, 18, 2);
+				while (bullets[nextInd] != null) nextInd++;
+                fy -= 6<<8;
+				bullets[nextInd] = new Bullet(enemy, fx+(5<<8), fy, 285, 50, 24, 14);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx-(5<<8), fy, 255, 50, 24, 14);
+                break;
+                
+			/************************************** ENEMY - TUZLABDA */
+            case 22:
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 270, 60, 28, 4);
+                break;
+                
+            case 23:
+				bullets[nextInd] = new Bullet(enemy, fx-(4<<8), fy, 270, 60, 25, 8);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(4<<8), fy, 270, 60, 25, 8);
+                break;
+                
+            case 24:
+				bullets[nextInd] = new Bullet(enemy, fx-(3<<8), fy, 240, 70, 28, 4);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 270, 70, 28, 4);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(3<<8), fy, 300, 70, 28, 4);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 180, 50, 26, 12);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 0, 50, 27, 12);
+                break;
+                
+			/************************************** ENEMY - FROST */
+            case 25:
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 270, 60, 29, 32);
+                break;
+                
+            case 26:
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 270, 80, 31, 64);
+                break;
+
+            case 27:
+				bullets[nextInd] = new Bullet(enemy, fx, fy, 270, 30, 30, 128);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx-(3<<8), fy, 225, 80, 32, 64);
+				while (bullets[nextInd] != null) nextInd++;
+				bullets[nextInd] = new Bullet(enemy, fx+(3<<8), fy, 315, 80, 33, 64);
+                break;
+
+            /************************************** ENEMY - TOWER */
+            case 28:
+                int fdx = fShipX+(fShipWidth>>1)-fx;
+                int fdy = fShipY-(fShipHeight>>1)-fy;        // FIXME: alapbol 5 pixellel az also resze felett indul a lovedek - szukseg lesz korrigalasra
+                int fd = Stuff.sqrt(fdx*fdx+fdy*fdy);
+				Bullet b = new Bullet(enemy, fx, fy, 0, 50, 35, 12);
+                b.fdy = fdy;
+                b.fdx = fdx;
+                b.fd = fd;
+                bullets[nextInd] = b;
+                break;
+        }
+		
+		nextInd++;
+		if (bulletLast < nextInd) bulletLast = nextInd;
+	}
+	
+/**********************************************************************************
+/* MENU
+/**********************************************************************************/
+	public static void moveMenu(int key) {	// kizarolag state_menu alatt hivodik meg
+		switch (key) {
+			case Canvas.DOWN:
+				menuSelect++;
+				while (menu[menuSelect+menuOffset] < 0 && menuSelect < 5)  menuSelect++;
+				break;
+
+			case Canvas.UP:
+				menuSelect--;
+				break;
+			
+			case Canvas.FIRE:
+				switch (menuSelect+menuOffset) {
+					case 3:			// about
+                        initStory(0);
+						state = STATE_MENU_TO_STORY;
+						break;
+						
+					case 4:			// exit
+                        nextState = STATE_EXIT;
+                        state = STATE_DISSOLVE;
+						break;
+                        
+                    case 6:         // continue
+                        loadGame();
+                        isDirty = false;
+                        state = STATE_MENU_DOOR_IN;
+                        break;
+                        
+                    case 7:         // hich scores
+                        state = STATE_MENU_TO_SCORES;
+                        break;
+						
+					case 10:		// new game
+						state = STATE_MENU_DOOR_IN;
+						break;
+							
+					case 12:	// upgrade ship
+						shopWeaponFront = shipWeaponFront;
+						shopWeaponBack = shipWeaponBack;
+						shopWeaponShield = shipWeaponShield;
+						shopWeaponExtra = shipWeaponExtra;
+						initShield(shopWeaponShield);
+						state = STATE_MENU_UPGRADE_OPEN;
+						break;
+				
+					case 20:	// front/rear/shield/extra menube belepes - weaponinfo megjelenites
+					case 21:
+					case 22:
+					case 23:
+						shopWeaponFront = shipWeaponFront;
+						shopWeaponBack = shipWeaponBack;
+						shopWeaponShield = shipWeaponShield;
+						shopWeaponExtra = shipWeaponExtra;
+						state = STATE_WEAPONINFO_IN;
+						break;
+					
+					case 29:	// front/rear/shield/extra menubol kilepes - weaponinfo eltuntetes
+						shopWeaponFront = shipWeaponFront;
+						shopWeaponBack = shipWeaponBack;
+						shopWeaponShield = shipWeaponShield;
+						shopWeaponExtra = shipWeaponExtra;
+						initShield(shopWeaponShield);
+						state = STATE_WEAPONINFO_OUT;
+						break;
+						
+					case 24:	// back from upgrade
+						state = STATE_MENU_UPGRADE_CLOSE;
+						break;
+                        
+                    case 27:
+                        switch (menuParent) {
+                            case 20:
+                                if (shopWeaponFront >= 0 && score >= weaponPrice[shopWeaponFront]) {
+                                    score -= weaponPrice[shopWeaponFront];
+                                    int newWeapon = shopWeaponFront;
+                                    if (shipWeaponFront >= 0) sellWeapon(menuParent);
+                                    shipWeaponFront = newWeapon;
+                                } else state = STATE_NOT_ENOUGH_MONEY;
+                                break;
+                            
+                            case 21:
+                                if (shopWeaponBack >= 0 && score >= weaponPrice[shopWeaponBack]) {
+                                    score -= weaponPrice[shopWeaponBack];
+                                    int newWeapon = shopWeaponBack;
+                                    if (shipWeaponBack >= 0) sellWeapon(menuParent);
+                                    shipWeaponBack = newWeapon;
+                                } else state = STATE_NOT_ENOUGH_MONEY;
+                                break;
+                                
+                            case 22:
+                                if (shopWeaponShield >= 0 && score >= weaponPrice[shopWeaponShield+16]) {
+                                    score -= weaponPrice[shopWeaponShield+16];
+                                    int newWeapon = shopWeaponShield;
+                                    if (shipWeaponShield >= 0) sellWeapon(menuParent);
+                                    shipWeaponShield = newWeapon;
+                                    initShield(shopWeaponShield);
+                                } else state = STATE_NOT_ENOUGH_MONEY;
+                                break;
+
+                            case 23:
+                                if (shopWeaponExtra >= 0 && score >= weaponPrice[shopWeaponExtra+18]) {
+                                    score -= weaponPrice[shopWeaponExtra+18];
+                                    int newWeapon = shopWeaponExtra;
+                                    if (shipWeaponExtra >= 0) sellWeapon(menuParent);
+                                    shipWeaponExtra = newWeapon;
+                                } else state = STATE_NOT_ENOUGH_MONEY;
+                                break;
+                        }
+                        break;
+                        
+                    case 28:
+                        sellWeapon(menuParent);
+                        break;
+						
+					case 25:	// upgrade - next
+						switch (menuParent) {
+							case 20:	// front
+								shopWeaponFront++;
+								if (shopWeaponFront >= 12) shopWeaponFront = 0;
+								break;
+
+							case 21:	// back
+								shopWeaponBack++;
+								if (shopWeaponBack >= 16 || shopWeaponBack < 12) shopWeaponBack = 12;
+								break;
+
+							case 22:	// shield
+								shopWeaponShield++;
+								if (shopWeaponShield >= 2 || shopWeaponShield < 0) shopWeaponShield = 0;
+								initShield(shopWeaponShield);
+								break;
+
+							case 23:	// extra
+								shopWeaponExtra++;
+								if (shopWeaponExtra >= 3 || shopWeaponExtra < 0) shopWeaponExtra = 0;
+								break;
+						}
+						break;
+						
+					case 26:	// upgrade - prev
+						switch (menuParent) {
+							case 20:	// front
+								shopWeaponFront--;
+								if (shopWeaponFront < 0) shopWeaponFront = 11;
+								break;
+
+							case 21:	// back
+								shopWeaponBack--;
+								if (shopWeaponBack < 12) shopWeaponBack = 15;
+								break;
+
+							case 22:	// shield
+								shopWeaponShield--;
+								if (shopWeaponShield < 0) shopWeaponShield = 1;
+								initShield(shopWeaponShield);
+								break;
+
+							case 23:	// extra
+								shopWeaponExtra--;
+								if (shopWeaponExtra < 0) shopWeaponExtra = 2;
+								break;
+						}
+						break;
+				}
+					
+				if (menuJump[menuSelect+menuOffset] >= 0) {
+					menuParent = menuOffset + menuSelect;
+					menuOffset = menuJump[menuSelect+menuOffset];
+					menuSelect = 0;
+				}
+				break;
+		}
+		if (menuSelect < 0) {
+			menuSelect += 5;
+			while (menu[menuSelect+menuOffset] < 0 && menuSelect > 0) menuSelect--;
+		}
+		if (menuSelect >= 5) menuSelect -= 5;
+	}
+
+    static void sellWeapon(int menuParent) {
+        switch (menuParent) {
+            case 20:
+                if (shipWeaponFront >= 0) {
+                    score += weaponPrice[shipWeaponFront];
+                    shipWeaponFront = shopWeaponFront = -1;
+                }
+                break;
+
+            case 21:
+                if (shipWeaponBack >= 0) {
+                    score += weaponPrice[shipWeaponBack];
+                    shipWeaponBack = shopWeaponBack = -1;
+                }
+                break;
+
+            case 22:
+                if (shipWeaponShield >= 0) {
+                    score += weaponPrice[16+shipWeaponShield];
+                    shipWeaponShield = shopWeaponShield = -1;
+                    initShield(shopWeaponShield);
+                }
+                break;
+
+            case 23:
+                if (shipWeaponExtra >= 0) {
+                    score += weaponPrice[18+shipWeaponExtra];
+                    shipWeaponExtra = shopWeaponExtra = -1;
+                }
+                break;
+        }
+    }        
+	
+	static void paintMenu(Graphics g) {
+		g.setClip(0, 0, scrX, scrY);
+		g.drawImage(menuBG, 71, 5, Graphics.TOP|Graphics.LEFT);
+		g.setClip(71, 14+(menuSelect*14), 57, 14);
+		g.drawImage(menuBGAct, 71, 14, Graphics.TOP|Graphics.LEFT);
+
+		for (int i = 0; i < 5; i++) {
+			int mess = menu[menuOffset+i];
+			if (mess >= 0) writeStringCentered(g, 100, 16+(i*14), messages[mess]);
+		}
+	}
+	
+	static void paintUpgrade(Graphics g) {
+		// hatter
+		g.setClip(0, 0, scrX, scrY);
+		g.drawImage(upgradeBG, 0, 5, Graphics.TOP|Graphics.LEFT);
+		
+		int topLimit = topBorderSize;
+		if (topScorePos == topInfoHeight) {
+			animateTopScore(g, 256);
+			writeNumRight(g, 35, 1, score);
+			topLimit = topInfoHeight;
+		}
+
+		int areaBottom = pbottom - weaponInfoPos;
+		
+		if (weaponInfoPos > 0) {		// fegyver infok kellenek
+			g.setClip(0, ptop, scrX, pheight);
+			g.drawImage(weaponInfoImage, 0, areaBottom, Graphics.TOP|Graphics.LEFT);
+
+			if (weaponInfoPos == weaponInfoHeight) {
+				switch (menuParent) {
+					case 20:	// front
+						if (shopWeaponFront >= 0) {
+							writeStringLeft(g, 2, areaBottom+4, messages[weaponNameIndex+(shopWeaponFront/3)]);
+							writeShop(g, leftDoorSize, areaBottom+15, weaponPrice[shopWeaponFront]);
+							writeShop(g, leftDoorSize, areaBottom+24, (shopWeaponFront%3)+1);
+						} else {
+							writeStringLeft(g, 2, areaBottom+4, messages[weaponNameIndex-1]);
+						}
+						break;
+
+					case 21:	// rear
+						if (shopWeaponBack >= 12) {
+							writeStringLeft(g, 2, areaBottom+4, messages[weaponNameIndex+4+((shopWeaponBack-12)>>1)]);
+							writeShop(g, leftDoorSize, areaBottom+15, weaponPrice[shopWeaponBack]);
+							writeShop(g, leftDoorSize, areaBottom+24, (shopWeaponBack&1)+1);
+						} else {
+							writeStringLeft(g, 2, areaBottom+4, messages[weaponNameIndex-1]);
+						}
+						break;
+						
+					case 22:	// shield
+						if (shopWeaponShield >= 0) {
+							writeStringLeft(g, 2, areaBottom+4, messages[weaponNameIndex+6]);
+							writeShop(g, leftDoorSize, areaBottom+15, weaponPrice[shopWeaponShield+16]);
+							writeShop(g, leftDoorSize, areaBottom+24, shopWeaponShield+1);
+						} else {
+							writeStringLeft(g, 2, areaBottom+4, messages[weaponNameIndex-1]);
+						}
+						break;
+						
+					case 23:	// extra
+						if (shopWeaponExtra >= 0) {
+							writeStringLeft(g, 2, areaBottom+4, messages[weaponNameIndex+7]);
+							writeShop(g, leftDoorSize, areaBottom+15, weaponPrice[shopWeaponExtra+18]);
+							writeShop(g, leftDoorSize, areaBottom+24, shopWeaponExtra+1);
+						} else {
+							writeStringLeft(g, 2, areaBottom+4, messages[weaponNameIndex-1]);
+						}
+						break;
+				}
+			}
+		}
+		int fShipX = ((leftDoorSize/2) - (shipWidth/2))<<8;
+		int fShipY = topBorderSize+((areaBottom-topBorderSize)<<7);
+		int fShipMiddleX = fShipX+(fShipWidth>>1);
+		int fShipMiddleY = fShipY+(fShipHeight>>1);
+		
+		// shield move
+		if (shopWeaponShield >= 0) {
+			int ad = (lastFrameTime*90+128)>>8;
+			for (int i = 0; i <= shopWeaponShield; i++) {
+				Bullet b = bullets[shieldBulletIndex[i]];
+				b.angle += ad;
+				while (b.angle >= 360) b.angle -= 360;
+				b.fxAct = fShipMiddleX+((Stuff.cos(b.angle)*fShipWidth)>>16)-(fBulletWidth[14]>>1);		// optme: ezt beirni konstansra
+				b.fyAct = fShipMiddleY+((Stuff.sin(b.angle)*fShipHeight)>>16)-(fBulletHeight[14]>>1);
+			}
+		}
+		
+		// move & draw & delete bullets
+		int actLastBullet = 0;
+		for (int i = 0; i < bulletLast; i++) {
+			Bullet b = bullets[i];
+			if (b != null) {
+				b.move(lastFrameTime);
+				
+				// draw
+				int actX = b.fxAct>>8;
+				int actY = b.fyAct>>8;
+				int type = b.type;
+				
+				// palyan van-e meg
+				if (actX+bulletWidth[type] <= 0 || actX >= leftDoorSize || actY+bulletHeight[type] <= topLimit || actY >= areaBottom) {
+					if (b.type != 14) bullets[i] = null;
+					continue;
+				}
+				
+				g.setClip(actX, actY, bulletWidth[type], bulletHeight[type]);
+				g.clipRect(0, topLimit, leftDoorSize, areaBottom-topLimit);
+				g.drawImage(bulletImages[type], actX-(b.actFrame*bulletWidth[type]), actY, Graphics.TOP|Graphics.LEFT);				
+				actLastBullet = i;
+			}
+		}
+		bulletLast = actLastBullet+1;
+
+		if (shopWeaponFront >= 0 && shopWeaponFront < 12) {
+			shipFrontFired += lastFrameTime;
+			while (shipFrontFired > weaponRate[shopWeaponFront]) {
+				shipFrontFired -= weaponRate[shopWeaponFront];
+				fireWeapon(false, fShipMiddleX, fShipY, shopWeaponFront);
+			}
+		}
+
+		if (shopWeaponBack >= 12 && shopWeaponBack < 16) {
+			shipBackFired += lastFrameTime;
+			while (shipBackFired > weaponRate[shopWeaponBack]) {
+				shipBackFired -= weaponRate[shopWeaponBack];
+				fireWeapon(false, fShipMiddleX, fShipY-(4<<8), shopWeaponBack);
+			}
+		}
+		
+		if (shopWeaponExtra >= 0) {
+			int actBullet = 15+shopWeaponExtra;
+			int actWeapon = shopWeaponExtra*3;
+			fExtraGunX = fShipX+fShipWidth;
+			fExtraGunY = fShipY+fShipHeight-fBulletHeight[actBullet]-extraGunVerticalTilt[shopWeaponExtra];
+
+			g.setClip(0, 0, scrX, scrY);
+			g.drawImage(bulletImages[actBullet], fExtraGunX>>8, fExtraGunY>>8, Graphics.TOP|Graphics.LEFT);
+			
+			shipExtraFired += lastFrameTime;
+			while (shipExtraFired > weaponRate[actWeapon]) {
+				shipExtraFired -= weaponRate[actWeapon];
+				fireWeapon(false, fExtraGunX+(fBulletWidth[actBullet]>>1), fExtraGunY, actWeapon);
+			}
+		}
+
+		// draw ship
+		int actShipX = fShipX>>8;
+		int actShipY = fShipY>>8;
+		g.setClip(actShipX, actShipY, shipWidth, shipHeight);
+		g.drawImage(shipImage, actShipX-(3*shipWidth), actShipY, Graphics.TOP|Graphics.LEFT);
+	}
+    
+    static void paintHighScore(Graphics g) {
+		g.setClip(0, 22, scrX, 88);
+        g.drawImage(startImage, 0, -18, Graphics.TOP|Graphics.LEFT);
+        g.setClip(0, ptop, scrX, pbottom);
+        g.fillRect(0, ptop, scrX, 17);
+        writeStringCentered(g, 64, 8, messages[weaponNameIndex+8]);
+        
+        for (int i = 0; i < 8 && highScoreNames[i] != null; i++) {
+            writeStringLeft(g, 2, 24+(i*9), highScoreNames[i]);
+            writeStringRight(g, 125, 24+(i*9), Integer.toString(highScores[i]));
+        }
+    }
+    
+    static void paintStoryPage(Graphics g, int xshift, int page) {
+        String s = messages[actStory];
+        int lastIndex = s.length();
+        int xPos = storyMargin+xshift;
+        int yPos = ptop+storyMargin;
+        
+        int indstart = storyPageIndex[page];
+        int indend = getNextLine(s, indstart, storyWidth);
+
+        while (true) {
+            String actline = s.substring(indstart, indend).trim();
+            int actlinewidth = getStringWidth(actline);
+            writeStringLeft(g, xPos, yPos, actline);
+
+            if (indend >= lastIndex) {  // story vege
+                lastStoryPage = actStoryPage;
+                break; 
+            }
+
+            yPos += fontHeight+3;
+            if (yPos > pbottom-storyMargin-fontHeight) {
+                storyPageIndex[actStoryPage+1] = indend+1;
+                break;
+            }
+
+            indstart = indend;
+            indend = getNextLine(s, indstart+1, storyWidth);
+        }
+    }
+    
+    static void paintStory(Graphics g, int accMenuTime) {
+        g.setClip(0, ptop, scrX, pheight);
+        //g.setColor(0);
+        //g.fillRect(0, ptop, scrX, pheight);
+        g.drawImage(startImage, 0, 0, Graphics.TOP|Graphics.LEFT);
+        
+        if (accMenuTime > 256) {    // csak az aktualisat kell kirakni
+            paintStoryPage(g, 0, actStoryPage);
+            
+        } else {
+    		int separatorPos = ((accMenuTime*accMenuTime*scrX)+32768)>>16;
+            
+            // melyik iranyba mozogjon
+            if (prevStoryPage < actStoryPage) {     // jobbra lepunk, balra csuszunk
+                paintStoryPage(g, scrX-separatorPos, actStoryPage);
+                paintStoryPage(g, -separatorPos, prevStoryPage);
+                
+            } else {    // balra lepunk, jobbra csuszunk
+                paintStoryPage(g, separatorPos-scrX, actStoryPage);
+                paintStoryPage(g, separatorPos, prevStoryPage);
+            }
+        }
+        
+    }
+	
+	// a felso keretet mozgatja
+	static void animateTopBorder(Graphics g, int accMenuTime) {
+		topBorderPos = accMenuTime*5;
+		g.setClip(0, 0, scrX, scrY);
+		g.drawImage(topBorder, 0, ((topBorderPos+128)>>8)-5, Graphics.TOP|Graphics.LEFT);
+	}
+	
+	// a menut elfedo ajto mozgatasa
+	static void animateRightDoor(Graphics g, int doorTime) {	
+		rightDoorPos = (doorTime*doorTime*57)>>8;
+		g.setClip(0, 0, scrX, scrY);
+		g.drawImage(doorImage, scrX-((rightDoorPos+128)>>8), 5, Graphics.TOP|Graphics.LEFT);
+	}
+	
+	static void animateLeftDoor(Graphics g, int doorTime) {
+		leftDoorPos = (doorTime*doorTime*71)>>8;
+		g.setClip(0, 0, scrX, scrY);
+		g.drawImage(doorImage, ((leftDoorPos+128)>>8)-71, 5, Graphics.TOP|Graphics.LEFT);
+	}
+	
+	static void animateMenuAsDoor(Graphics g, int doorTime) {	
+		rightDoorPos = (doorTime*doorTime*57)>>8;
+		g.setClip(0, 0, scrX, scrY);
+		g.drawImage(menuBG, scrX-((rightDoorPos+128)>>8), 5, Graphics.TOP|Graphics.LEFT);
+	}
+                    
+    // a score es a lives mozgatasa
+	static void animateTopLives(Graphics g, int topTime) {
+		topLivesPos = (topTime*11+128)>>8;
+		
+		g.setClip(0, 0, scrX, scrY);
+		g.drawImage(topLives, scrX-topInfoLivesWidth, topLivesPos-topInfoHeight, Graphics.TOP|Graphics.LEFT);
+	}
+
+	static void animateTopScore(Graphics g, int topTime) {
+		topScorePos = (topTime*11+128)>>8;
+		
+		g.setClip(0, 0, scrX, scrY);
+		g.drawImage(topScore, 0, topScorePos-topInfoHeight, Graphics.TOP|Graphics.LEFT);
+	}
+	
+	static void animateBottomDisplay(Graphics g, int accMenuTime) {
+		bottomBorderPos = accMenuTime*18;
+		bottomLeftDisplayPos = accMenuTime*41;
+		bottomRightDisplayPos = accMenuTime*42;
+
+		g.setClip(0, 0, scrX, scrY);
+		g.drawImage(bottomBorder, 41, scrY-((bottomBorderPos+128)>>8), Graphics.TOP|Graphics.LEFT);
+		g.drawImage(bottomLeftDisplay, ((bottomLeftDisplayPos+128)>>8)-41, 110, Graphics.TOP|Graphics.LEFT);
+		g.drawImage(bottomRightDisplay, scrX-((bottomRightDisplayPos+128)>>8), 110, Graphics.TOP|Graphics.LEFT);
+	}
+	
+	static void animateBottomMenuIcons(Graphics g, int accMenuTime, Image leftIcon, Image rightIcon) {
+		g.setClip(0, 0, scrX, scrY);
+
+		if (leftIcon != null) {
+    		bottomLeftIconPos = (accMenuTime*accMenuTime*84)>>8;
+            g.drawImage(leftIcon, ((bottomLeftIconPos+128)>>8)-78, 118, Graphics.TOP|Graphics.LEFT);
+        }
+        
+		if (rightIcon != null) {
+    		bottomRightIconPos = (accMenuTime*accMenuTime*84)>>8;
+            g.drawImage(rightIcon, scrX+42-((bottomRightIconPos+128)>>8), 118, Graphics.TOP|Graphics.LEFT);
+        }
+	}
+	
+	static void animateWeaponInfo(Graphics g, int accMenuTime) {
+		weaponInfoPos = (accMenuTime*accMenuTime*33+32768)>>16;
+
+		// a kirajzolast a paintUpgrade() vegzi
+		//g.setClip(0, ptop, scrX, pheight);
+		//g.drawImage(weaponInfoImage, 0, pbottom-weaponInfoPos, Graphics.TOP|Graphics.LEFT);
+	}
+
+	static byte[] dissolveBitfield = null;
+	static int dissolvedPixels = 0;
+	static void animateDissolve(Graphics g, int accMenuTime) {
+		g.setColor(0, 0, 0);
+		g.setClip(0, 0, scrX, scrY);
+		
+		if (dissolveBitfield == null) {
+			dissolveBitfield = new byte[512];
+			dissolvedPixels = 0;
+		}
+		
+		for (; (dissolvedPixels>>4) < accMenuTime; dissolvedPixels++) {
+			int next = 0;
+			int time = 3;
+			do {
+				if (time > 0) {
+					next = Math.abs(random.nextInt()) & 4095;
+					time--;
+				} else {
+					next++;
+					if (next >= 4096) next = 0;
+				}
+			} while  ((dissolveBitfield[next>>3] & (1<<(next&7))) > 0);
+			
+			dissolveBitfield[next>>3] |= (1<<(next&7));
+			g.fillRect((next&63)<<1, next>>5, 2, 2);
+		}
+	}
+	
+/**********************************************************************************
+/* STATE MACHINE
+/**********************************************************************************/
+	public void paint(Graphics g) {
+        //System.out.println("state: "+state+"; accMenuTime: "+accMenuTime+"; lastFrameTime: "+lastFrameTime);
+		switch (state) {
+			case STATE_START:
+                // kezdokep
+                if (accMenuTime < 0) {
+                    if (startImage == null) {
+                        try {
+                            startImage = Image.createImage("/start.png");
+                            g.drawImage(startImage, 0, 0, Graphics.TOP|Graphics.LEFT);
+                        } catch (Exception e) {}
+                    } else {
+                        accMenuTime = 0;
+                        loadStatic();
+                        loadMenu();
+                    }
+                } else {
+    				accMenuTime += lastFrameTime;
+                    if (accMenuTime > 1 /* FIXME: 512*/) {
+                        state = STATE_MENU_IN;
+                        accMenuTime = 0;
+                    }
+                }
+				break;
+				
+			case STATE_MENU_IN:
+				accMenuTime += lastFrameTime;
+				if (accMenuTime < 256) {
+					animateLeftDoor(g, accMenuTime);
+					animateRightDoor(g, accMenuTime);
+					animateBottomDisplay(g, accMenuTime);
+					animateBottomMenuIcons(g, accMenuTime, bottomPrev, bottomNext);
+					animateTopBorder(g, accMenuTime);
+				} else {
+					// redraw, init next state
+					animateLeftDoor(g, 256);
+					animateRightDoor(g, 256);
+					animateBottomDisplay(g, 256);
+					animateBottomMenuIcons(g, 256, bottomPrev, bottomNext);
+					animateTopBorder(g, 256);
+					accMenuTime = 0;
+					state = STATE_MENU_DOOR_OUT;
+				}
+				break;
+				
+			case STATE_MENU_DOOR_OUT:
+				accMenuTime += lastFrameTime;
+				if (accMenuTime < 96) {
+					// nop
+				} else if (accMenuTime < 224) {
+					g.drawImage(menuBG, 71, 5, Graphics.TOP|Graphics.LEFT);
+					animateRightDoor(g, (224-accMenuTime)<<1);
+				} else {
+					// init next state
+					accMenuTime = 0;
+					state = STATE_MENU;
+				}
+				break;
+				
+			case STATE_MENU_DOOR_IN:
+				accMenuTime += lastFrameTime;
+				if (accMenuTime < 0) {
+					accMenuTime = 0;
+					initLevel(0);
+					state = STATE_MENU_TO_GAME;
+				} else if (accMenuTime < 128) {
+					animateRightDoor(g, accMenuTime<<1);
+				} else {
+					accMenuTime = Integer.MIN_VALUE;
+					animateRightDoor(g, 256);
+				}
+				break;
+
+			case STATE_MENU_TO_GAME:
+				paintLevel(g);
+				accMenuTime += lastFrameTime;
+				if (accMenuTime < 256) {
+					animateLeftDoor(g, 256-accMenuTime);
+					animateRightDoor(g, 256-accMenuTime);
+					animateBottomDisplay(g, 256);
+					animateBottomMenuIcons(g, 256-accMenuTime, bottomPrev, bottomNext);
+				} else {
+					// init next state
+					animateBottomDisplay(g, 256);
+					accMenuTime = 0;
+					state = STATE_GAME_TOP_IN;
+					disposeMenu();
+				}
+				break;
+				
+			case STATE_GAME_TO_MENU:
+				paintLevel(g);
+				accMenuTime += lastFrameTime;
+				if (accMenuTime < 0) {
+                    disposeLevel();
+                    loadMenu();
+					state = STATE_MENU_DOOR_OUT;
+                } else if (accMenuTime < 128) {
+					animateLeftDoor(g, accMenuTime<<1);
+					animateRightDoor(g, accMenuTime<<1);
+					animateBottomDisplay(g, 256);
+					animateBottomMenuIcons(g, accMenuTime<<1, bottomPrev, bottomNext);
+				} else {
+					// redraw, init next state
+					animateLeftDoor(g, 256);
+					animateRightDoor(g, 256);
+					animateBottomDisplay(g, 256);
+					animateBottomMenuIcons(g, 256, bottomPrev, bottomNext);
+					accMenuTime = Integer.MIN_VALUE;
+				}
+				break;
+
+			case STATE_MENU_TO_SCORES:
+				paintHighScore(g);
+				accMenuTime += lastFrameTime;
+				if (accMenuTime < 256) {
+					animateLeftDoor(g, 256-accMenuTime);
+					animateMenuAsDoor(g, 256-accMenuTime);
+				} else {
+					accMenuTime = 0;
+					state = STATE_SCORES;
+				}
+				break;
+
+            case STATE_SCORES:
+				paintHighScore(g);
+                break;
+
+			case STATE_SCORES_TO_MENU:
+				paintHighScore(g);
+				accMenuTime += lastFrameTime;
+				if (accMenuTime < 256) {
+					animateLeftDoor(g, accMenuTime);
+					animateMenuAsDoor(g, accMenuTime);
+				} else {
+					animateLeftDoor(g, 256);
+					animateMenuAsDoor(g, 256);
+					accMenuTime = 0;
+					state = STATE_MENU;
+				}
+				break;
+
+            case STATE_MENU_UPGRADE_OPEN:
+				paintUpgrade(g);
+				accMenuTime += lastFrameTime;
+				if (accMenuTime < 256) {
+					animateLeftDoor(g, 256-accMenuTime);
+				} else {
+					accMenuTime = 0;
+					state = STATE_MENU_UPGRADE;
+				}
+				break;
+
+			case STATE_MENU_UPGRADE_CLOSE:
+				paintUpgrade(g);
+				accMenuTime += lastFrameTime;
+				if (accMenuTime < 256) {
+					animateLeftDoor(g, accMenuTime);
+				} else {
+					animateLeftDoor(g, 256);
+					accMenuTime = 0;
+					state = STATE_MENU;
+				}
+				break;
+
+			case STATE_MENU_UPGRADE:
+				paintMenu(g);
+				paintUpgrade(g);
+				break;
+				
+			case STATE_MENU:
+				paintMenu(g);
+				break;
+
+			case STATE_GAME_TOP_IN:
+				paintLevel(g);
+				accMenuTime += lastFrameTime;
+				if (accMenuTime < 128) {
+					animateTopLives(g, accMenuTime<<1);
+					animateTopScore(g, accMenuTime<<1);
+					animateBottomDisplay(g, 256);
+					animateBottomMenuIcons(g, accMenuTime<<1, null, bottomHP);
+				} else {
+					animateTopLives(g, 256);
+					animateTopScore(g, 256);
+					animateBottomDisplay(g, 256);
+					animateBottomMenuIcons(g, 256, null, bottomHP);
+					accMenuTime = 0;
+					state = STATE_GAME;
+				}
+				break;
+				
+			case STATE_GAME_TOP_OUT:
+				paintLevel(g);
+				accMenuTime += lastFrameTime;
+				if (accMenuTime < 128) {
+                    int remTime = 256-(accMenuTime<<1);
+					animateTopLives(g, remTime);
+					animateTopScore(g, remTime);
+					animateBottomDisplay(g, 256);
+					animateBottomMenuIcons(g, remTime, null, bottomHP);
+					animateTopBorder(g, 256);
+				} else {
+					animateTopLives(g, 0);
+					animateTopScore(g, 0);
+					animateBottomDisplay(g, 256);
+					animateBottomMenuIcons(g, 0, null, bottomHP);
+					animateTopBorder(g, 256);
+					accMenuTime = 0;
+					state = STATE_GAME_TO_MENU;
+				}
+				break;
+
+            case STATE_GAME:
+				paintLevel(g);
+
+				// top
+				g.setClip(0, 0, scrX, scrY);
+				g.drawImage(topScore, 0, 0, Graphics.TOP|Graphics.LEFT);
+				g.drawImage(topLives, scrX-37, 0, Graphics.TOP|Graphics.LEFT);
+				
+				// life
+				writeNumLeft(g, 108, 1, actFrameStart-lastFrameStart);
+		
+				// score
+				//writeStringLeft(g, 0, 0, ZOH);
+				writeNumRight(g, 35, 1, score);
+				//writeNumRight(g, 35, 1, enBegin);
+				
+				// hp
+				if (shipPrevHP != shipHP) {
+    				g.setClip(0, 0, scrX, scrY);
+    				g.drawImage(bottomRightDisplay, scrX-42, 110, Graphics.TOP|Graphics.LEFT);
+					shipPrevHP = shipHP;
+					int hpLen = (shipHP*((36<<8)/100)+128)>>8;
+					g.setClip(scrX-42, 118, hpLen, 7);
+					g.drawImage(bottomHP, scrX-42, 118, Graphics.TOP|Graphics.LEFT);
+				}
+				
+				// foellen hp
+                if (mainEnemy != null && prevMainEnemyHP != mainEnemy.hp) {
+    				g.setClip(0, 0, scrX, scrY);
+            		g.drawImage(bottomLeftDisplay, 0, 110, Graphics.TOP|Graphics.LEFT);
+					prevMainEnemyHP = mainEnemy.hp;
+					int hpLen = (mainEnemy.hp*((35<<8)/mainEnemy.entype.hp)+128)>>8;
+                    g.setColor(255, 0, 0);
+                    g.fillRect(6, 118, hpLen, 7);
+                }
+				
+				break;
+
+			case STATE_DISSOLVE:		// palyavaltas
+				accMenuTime += lastFrameTime;
+				if (accMenuTime < 256) {
+					animateDissolve(g, accMenuTime);
+				} else {
+					animateDissolve(g, 256);
+					dissolveBitfield = null;
+					accMenuTime = 0;
+					state = nextState;
+				}
+				break;
+
+			case STATE_WEAPONINFO_IN:
+				paintUpgrade(g);
+				accMenuTime += lastFrameTime;
+				if (accMenuTime < 128) {
+					animateWeaponInfo(g, accMenuTime<<1);
+					animateTopScore(g, accMenuTime<<1);
+				} else {
+					animateWeaponInfo(g, 256);
+					animateTopScore(g, 256);
+					accMenuTime = 0;
+					state = STATE_MENU_UPGRADE;
+				}
+				break;
+
+			case STATE_WEAPONINFO_OUT:
+				paintUpgrade(g);
+				accMenuTime += lastFrameTime;
+				if (accMenuTime < 128) {
+					animateWeaponInfo(g, 256-(accMenuTime<<1));
+					animateTopBorder(g, 256);
+					animateTopScore(g, 256-(accMenuTime<<1));
+				} else {
+					animateTopBorder(g, 256);
+					animateWeaponInfo(g, 0);
+					accMenuTime = 0;
+					topScorePos = 0;
+					state = STATE_MENU_UPGRADE;
+				}
+				break;
+
+			case STATE_NOT_ENOUGH_MONEY:	// megvillogtatja a score-t
+				accMenuTime += lastFrameTime;
+				if (accMenuTime < 192) {
+    				topScorePos = 0;
+        			paintUpgrade(g);
+					animateTopScore(g, 256);
+					if ((accMenuTime&32) == 0) writeNumRight(g, 35, 1, score);
+				} else {
+					topScorePos = topInfoHeight;
+					accMenuTime = 0;
+					state = STATE_MENU_UPGRADE;
+				}
+				break;
+
+            case STATE_MENU_TO_STORY:
+				paintStory(g, 512);
+				accMenuTime += lastFrameTime;
+				if (accMenuTime < 256) {
+					animateLeftDoor(g, 256-accMenuTime);
+					animateMenuAsDoor(g, 256-accMenuTime);
+				} else {
+					state = STATE_STORY;
+				}
+				break;
+                
+            case STATE_STORY:
+				paintStory(g, accMenuTime);
+                accMenuTime += lastFrameTime;
+                break;
+
+            case STATE_STORY_TO_MENU:
+				paintStory(g, 512);
+				accMenuTime += lastFrameTime;
+				if (accMenuTime < 256) {
+					animateLeftDoor(g, accMenuTime);
+					animateMenuAsDoor(g, accMenuTime);
+				} else {
+					animateLeftDoor(g, 256);
+					animateMenuAsDoor(g, 256);
+					accMenuTime = 0;
+					state = STATE_MENU;
+				}
+				break;
+                
+            case STATE_GAME_LEVEL_END:
+                paintLevel(g);
+				accMenuTime += lastFrameTime;
+				if (accMenuTime < 128) {
+                    // ship
+            		int actShipX = ((fShipX-fenshift+128)>>8)+pleft;
+                    int actShipShift = (accMenuTime*accMenuTime*pheight)>>8;
+                    int actShipY = ((fShipY-actShipShift+128)>>8)+ptop;
+
+                    g.setClip(actShipX, actShipY, shipWidth, shipHeight);
+                    g.drawImage(shipImage, actShipX-(((shipSlideTime+16)>>5)*shipWidth), actShipY, Graphics.TOP|Graphics.LEFT);
+
+                    // kezelofelulet
+                    int remTime = 256-(accMenuTime<<1);
+					animateTopLives(g, remTime);
+					animateTopScore(g, remTime);
+					animateBottomDisplay(g, 256);
+					animateBottomMenuIcons(g, remTime, null, bottomHP);
+					animateTopBorder(g, 256);
+
+				} else {
+					animateTopLives(g, 0);
+					animateTopScore(g, 0);
+					animateBottomDisplay(g, 256);
+					animateBottomMenuIcons(g, 0, null, bottomHP);
+					animateTopBorder(g, 256);
+					accMenuTime = 0;
+					state = STATE_GAME_TO_MENU;
+				}
+				break;
+                
+            case STATE_EXIT:
+    			myMIDlet.notifyDestroyed();
+                break;
+                
+		}
+		
+		//System.out.println("END: "+state+", "+topScorePos);
+	}
+
+/**********************************************************************************
+/* PAINTLEVEL
+/**********************************************************************************/
+	static int x1max, x2min, y1max, y2min;
+	final static boolean collide(int ax1, int ay1, int ax2, int ay2, int bx1, int by1, int bx2, int by2) {
+		x1max = (ax1 < bx1)?bx1:ax1;
+		x2min = (ax2 > bx2)?bx2:ax2;
+		
+		if (x1max < x2min) {
+			y1max = (ay1 < by1)?by1:ay1;
+			y2min = (ay2 > by2)?by2:ay2;
+					
+			if (y1max < y2min) {
+				return true;
+			}
+		}
+		return false;
+	}
+	
+	final static void createParticles(int fx, int fy, int damage) {
+		int num = 1+(damage>>2);
+        //System.out.println("creating "+num+" particles");
+		// find a free slot
+		for (int j = 0; j < num; j++) {
+			for (int i = 0; i < particlefTime.length; i++) {
+				if (particlefTime[i] <= 0) {
+					int ran = Math.abs(random.nextInt());
+					particlefTime[i] = 63;
+					particlefSpeed[i] = ran&31;
+					particleAngle[i] = ran%360;
+					particlefXPos[i] = fx;
+					particlefYPos[i] = fy;
+				}
+			}
+		}
+	}
+	
+    static void drawBullet(Graphics g, int i) {
+        Bullet b = bullets[i];
+        int actX = (b.fxAct-fenshift+128)>>8;
+        int actY = ((b.fyAct+128)>>8)+ptop;
+        int type = b.type;
+
+        // palyan van-e meg
+        if (actX+bulletWidth[type] <= pleft || actX >= pright || actY+bulletHeight[type] <= ptop || actY >= pbottom) {
+            if (b.type != 14) bullets[i] = null;	// shield
+            //System.out.println("deleted "+i+", "+actX);
+            return;
+        }
+
+        g.setClip(actX, Math.max(actY, ptop), bulletWidth[type], Math.min(bulletHeight[type], pbottom-actY));
+        g.drawImage(bulletImages[type], actX-(b.actFrame*bulletWidth[type]), actY, Graphics.TOP|Graphics.LEFT);
+    }
+    
+    static void paintLevel(Graphics g) {
+		// layers
+		for (int i = 0; i < bgLayers.length; i++)
+			bgLayers[i].draw(g);
+		
+		// bulletmozgas
+		int actLastBullet = 0;
+		for (int i = 0; i < bulletLast; i++) {
+			Bullet b = bullets[i];
+			if (b != null) {
+				if (b.type != 13) {
+					b.move(lastFrameTime);
+
+				} else {	// celkoveto - get closest enemy
+					int mind = Integer.MAX_VALUE;
+					int mindx = 0, mindy = 0;
+					for (int j = enBegin; j < enemies.length; j++) {
+						if (enemies[j] != null) {
+							Enemy en = enemies[j];
+							if (en.pathPoint >= 0 && en.explosionTime < 0) {
+								int dx = (en.fxAct+(fenWidth[en.type]>>1)) - b.fxAct;		// optme
+								int dy = (en.fyAct+(fenHeight[en.type]>>1)) - b.fyAct;
+								int actd = dx*dx+dy*dy;
+
+								if (actd < mind) {
+									mind = actd;
+									mindx = dx;
+									mindy = dy;
+								}
+							} else {
+								break;
+							}
+						}
+					}
+					if (mind < Integer.MAX_VALUE) {	// mozgatjuk
+						mind = Stuff.sqrt(mind);
+						b.seek(mindx, mindy, mind, lastFrameTime);
+					} else {
+						b.move(lastFrameTime);		// nincs cel, folytassa a mozgast
+					}
+				}
+				actLastBullet = i;
+			}
+		}
+		bulletLast = actLastBullet+1;
+		//System.out.println("lastbullet: "+bulletLast);
+		
+		enbgpos = (int)(((accFrameTime*fEnemyBGSpeed)+fAccBGPos)>>16)+pheight;
+		int fShipLeft = fShipX, fShipRight = fShipLeft+fShipWidth, fShipTop = fShipY, fShipBottom = fShipY+fShipHeight;
+		int fShipMiddleX = fShipLeft+(fShipWidth>>1), fShipMiddleY = fShipY+(fShipHeight>>1);
+		
+        // stat. main enemy
+        if (mainEnemy != null && mainEnemy.type == 22 && scrollLevel) {
+            if (mainEnemy.bgPos <= enbgpos) scrollLevel = false;
+        }
+        
+		// bullet-krealas
+		if (shipDestroyTime < 0) {
+            if (shipWeaponFront >= 0 && shipWeaponFront < 12) {
+                shipFrontFired += lastFrameTime;
+                while (shipFrontFired > weaponRate[shipWeaponFront]) {
+                    shipFrontFired -= weaponRate[shipWeaponFront];
+                    fireWeapon(false, fShipMiddleX, fShipY, shipWeaponFront);
+                }
+            }
+
+            if (shipWeaponBack >= 12 && shipWeaponBack < 16) {
+                shipBackFired += lastFrameTime;
+                while (shipBackFired > weaponRate[shipWeaponBack]) {
+                    shipBackFired -= weaponRate[shipWeaponBack];
+                    fireWeapon(false, fShipMiddleX, fShipY-(4<<8), shipWeaponBack);
+                }
+            }
+
+            if (shipWeaponShield >= 0) {
+                int ad = (lastFrameTime*90+128)>>8;
+                for (int i = 0; i <= shipWeaponShield; i++) {
+                    //System.out.println("bullet "+i+": "+shieldBulletIndex[i]);
+                    Bullet b = bullets[shieldBulletIndex[i]];
+                    b.angle += ad;
+                    while (b.angle >= 360) b.angle -= 360;
+                    b.fxAct = fShipMiddleX+((Stuff.cos(b.angle)*fShipWidth)>>16)-(fBulletWidth[14]>>1);		// optme: ezt beirni konstansra
+                    b.fyAct = fShipMiddleY+((Stuff.sin(b.angle)*fShipHeight)>>16)-(fBulletHeight[14]>>1);
+                }
+            }
+
+            if (shipWeaponExtra >= 0) {
+                int actBullet = 15+shipWeaponExtra;
+                int actWeapon = shipWeaponExtra*3;
+
+                // mozgatas a ship fele
+                int actD = extraGunSpeed*lastFrameTime;
+                int diffX = fShipX;
+                if (shipWeaponExtraLeft) {
+                    diffX -= fBulletWidth[actBullet];
+                } else {
+                    diffX += fShipWidth;
+                }
+                diffX -= fExtraGunX;
+                int diffY = fShipY+fShipHeight-fBulletHeight[actBullet]-extraGunVerticalTilt[shipWeaponExtra] - fExtraGunY;
+                int targetD = Stuff.sqrt(diffX*diffX+diffY*diffY);
+                if (targetD <= actD) {
+                    fExtraGunX += diffX;
+                    fExtraGunY += diffY;
+                } else {
+                    int ratio = (actD<<8)/targetD;
+                    fExtraGunX += (diffX*ratio+128)>>8;
+                    fExtraGunY += (diffY*ratio+128)>>8;
+
+                }
+
+                shipExtraFired += lastFrameTime;
+                while (shipExtraFired > weaponRate[actWeapon]) {
+    				shipExtraFired -= weaponRate[actWeapon];
+    				fireWeapon(false, fExtraGunX+(fBulletWidth[actBullet]>>1), fExtraGunY, actWeapon);
+    			}
+            }
+		}
+
+		// particle-mozgatas
+		// todo: esetleg lehet gyorsitani, ha a particleangle helyett egybol a sin-cos-t jegyezzuk meg
+		for (int i = 0; i < particlefTime.length; i++) {
+			if (particlefTime[i] > 0) {
+				particlefTime[i] -= lastFrameTime;
+				int d = lastFrameTime*particlefSpeed[i];
+				particlefXPos[i] += (Stuff.cos(particleAngle[i])*d)>>16;
+				particlefYPos[i] += (Stuff.sin(particleAngle[i])*d)>>16;
+			}
+		}
+		
+		// bullet-kirakas - also lovedekek
+		for (int i = 0; i < bulletLast; i++) {
+			Bullet b = bullets[i];
+			if (b != null && b.type != 39) {
+                drawBullet(g, i);
+			}
+		}
+		
+		// enemy
+		for (int i = enBegin; i < enemies.length; i++) {
+			if (enemies[i] == null) {
+				if (i == enBegin) enBegin++;
+				//System.out.println("enBegin: "+enBegin);
+				continue;
+			}
+			
+			Enemy en = enemies[i];
+			
+			// actor
+			if (en.type >= 64) {
+				if (en.bgPos <= enbgpos) {	// actor teendo
+					switch (en.type) {
+						case 64:								// message
+							messageID = en.actorParams[0];
+							messageTime = en.actorParams[1]*256;
+							break;
+							
+						case 65:								// checkpoint
+							messageID = 0+gameMessageIndex;
+							messageTime = 3*256;
+							break;
+
+						case 66:								// sebvaltas
+							fAccBGPos = accFrameTime*fEnemyBGSpeed;
+							fMaxBGSpeed = 0;
+							for (int j = 0; j < bgLayers.length; j++) {
+								fEnemyBGSpeed = en.actorParams[j<<1]+(en.actorParams[(j<<1)+1]<<8);
+								if (fEnemyBGSpeed > fMaxBGSpeed) fMaxBGSpeed = fEnemyBGSpeed;
+								bgLayers[j].setSpeed(fEnemyBGSpeed);
+							}
+							
+							maxvscrdelta = (maxBGShift<<16)/fMaxBGSpeed;
+							fMaxEnShift = maxBGShift*((fEnemyBGSpeed<<8)/fMaxBGSpeed);
+							penwidth = pwidth+((fMaxEnShift)>>7);
+							penmiddle = penwidth>>1;
+							
+							int oldLimit = fShipLimitX;
+							fShipLimitX = (penwidth-shipWidth)<<8;
+							fShipX = (fShipX*((fShipLimitX<<8)/oldLimit)+128)>>8;
+							movePlayer(1, 1, 0);	// init shift values
+							accFrameTime = 0;
+							break;
+
+						case 67:								// end level
+							break;
+					}
+					enemies[i] = null;
+				}
+				continue;
+			}
+			
+			if (en.pathPoint >= 0) {
+				if (en.explosionTime < 0) {
+					en.move(lastFrameTime);
+
+				} else {
+					if (en.p == null) {				// stationary
+						en.move(lastFrameTime);
+						en.fyAct += (fenHeight[en.type]>>1)-(fExplSize>>1);	// optme + opt stat enemy
+					}
+					en.explosionTime += lastFrameTime;
+					if (en.type < 20) {
+                        if (en.explosionTime >= 192) {
+                            enemies[i] = null;
+                            continue;
+                        }
+					} else {
+                        if (en.explosionTime >= 1280) {
+                            enemies[i] = null;
+                            state = STATE_GAME_LEVEL_END;
+                            continue;
+                        }
+                    }
+				}
+				
+			} else if (en.bgPos <= enbgpos+enHeight[en.type]) {	// aktival
+					en.activate();
+                    if (en.type >= 20) {    // foellen
+                        mainEnemy = en;
+                    }
+
+			} else {
+				break;
+			}
+            
+			// real -> virtual poziciok
+			int fxPos = en.fxAct;
+			int fyPos = en.fyAct;
+			int fxPos2, fyPos2;
+
+			if (en.explosionTime < 0 && en.ghostTime < 0) {
+				fxPos2 = fxPos + fenWidth[en.type];
+				fyPos2 = fyPos + fenHeight[en.type];
+
+                // enemy shot
+                if (en.lastShot >= 0) {
+                    en.lastShot += lastFrameTime;
+                    if (en.lastShot > en.bulletFreq) {
+                        en.lastShot -= en.bulletFreq;
+                        fireWeapon(true, fxPos+(fenWidth[en.type]>>1), fyPos+(fenHeight[en.type]>>1) /*fyPos2-(5<<8)*/, en.entype.bulletType);
+                    }
+                }
+
+				// utkozes - enemy vs. ship
+				if (shipDestroyTime < 0 && collide(fxPos, fyPos, fxPos2, fyPos2, fShipLeft, fShipTop, fShipRight, fShipBottom)) {
+					int damage = Math.min(shipHP, en.hp);
+                    shipHP -= damage;
+                    en.hp -= damage;
+					if (en.hp <= 0) {
+                        en.explosionTime = 0;
+                    }
+                    if (shipHP <= 0) shipDestroyTime = 0;
+                    
+                    score += en.entype.point;
+                    actScore += en.entype.point;
+
+                    int enWidthHalf = fenWidth[en.type]>>1;
+                    int enHeightHalf = fenHeight[en.type]>>1;
+
+                    if (actScore >= levelNumHPScore) {   // kirakjuk a hp-bulletet
+                        actScore -= levelNumHPScore;
+                        int nextInd = 0;
+                        while (bullets[nextInd] != null) nextInd++;
+                        bullets[nextInd] = new Bullet(true, en.fxAct+(enWidthHalf-(8<<7)), en.fyAct+(enHeightHalf-(8<<7)), 270, fEnemyBGSpeed>>8, 34, 0);
+                    }
+
+                    // explosion size korrigalas
+                    int dx = enWidthHalf-(fExplSize>>1);
+                    int dy = enHeightHalf-(fExplSize>>1);
+					en.fxAct += dx;
+					en.fyAct += dy;
+					fxPos += dx;
+					fyPos += dy;
+					fxPos2 = fxPos+fExplSize;
+					fyPos2 = fyPos+fExplSize;
+
+				} else {
+					// utkozes - enemy vs. bullet
+					for (int j = 0; j < bulletLast; j++) {
+						Bullet b = bullets[j];
+
+						if (b != null && !b.enemy) {
+							int fbulletLeft = b.fxAct;
+							int fbulletRight = fbulletLeft + fBulletWidth[b.type];
+							int fbulletTop = b.fyAct;
+							int fbulletBottom = fbulletTop + fBulletHeight[b.type];
+
+							if (collide(fxPos, fyPos, fxPos2, fyPos2, fbulletLeft, fbulletTop, fbulletRight, fbulletBottom)) {
+								en.hp -= b.damage;
+								if (b.type != 14) bullets[j] = null;	// shield
+
+								if (en.hp <= 0) {
+									en.explosionTime = 0;
+                                    score += en.entype.point;
+                                    actScore += en.entype.point;
+                                    
+                                    int enWidthHalf = fenWidth[en.type]>>1;
+                                    int enHeightHalf = fenHeight[en.type]>>1;
+                                    
+                                    if (actScore >= levelNumHPScore) {   // kirakjuk a hp-bulletet
+                                        actScore -= levelNumHPScore;
+                                        int nextInd = 0;
+                                        while (bullets[nextInd] != null) nextInd++;
+                                        bullets[nextInd] = new Bullet(true, en.fxAct+(enWidthHalf-(8<<7)), en.fyAct+(enHeightHalf-(8<<7)), 270, fEnemyBGSpeed>>8, 34, 0);
+                                    }
+
+									// explosion size korrigalas
+									int dx = enWidthHalf-(fExplSize>>1);
+									int dy = enHeightHalf-(fExplSize>>1);
+									en.fxAct += dx;
+									en.fyAct += dy;
+									fxPos += dx;
+									fyPos += dy;
+									fxPos2 = fxPos+fExplSize;
+									fyPos2 = fyPos+fExplSize;
+
+								} else {	// villanas + particle
+									en.flashTime = 32;
+									createParticles((x1max+x2min)>>1, (y1max+y2min)>>1, b.damage);
+								}
+							}
+						}
+					}
+				}
+
+			} else {
+				fxPos2 = fxPos+fExplSize;
+				fyPos2 = fyPos+fExplSize;
+			}
+
+			// ghost
+			if (en.ghostTime >= 0 && en.explosionTime < 0) {
+				int gxPos = (en.fxGhost*penwidth-fenshift+128)>>8;
+				int gyPos = ((en.fyGhost*pheight+128)>>8)+ptop;
+				
+				//System.out.println("Draw: "+gxPos+", "+gyPos);
+				if (gxPos < pright && gyPos < pbottom && gxPos+enWidth[10] > pleft && gyPos+enHeight[10] > ptop) {
+					g.setClip(gxPos, Math.max(gyPos, ptop), enWidth[10], Math.min(enHeight[10], pbottom-gyPos));
+					g.drawImage(enemyImages[10], gxPos-((4-(en.ghostTime>>5))*enWidth[10]), gyPos, Graphics.TOP|Graphics.LEFT);
+				}
+			}
+			
+			// fastenemy
+			if (en.type == 9 && en.explosionTime < 0) {
+				for (int j = 1; j >= 0; j--) {
+					int sxPos = (en.shadows[j].fxAct - fenshift+128)>>8;
+					int syPos = ((en.shadows[j].fyAct+128)>>8) + ptop;
+
+					if (sxPos < pright && syPos < pbottom && sxPos+enWidth[9] > pleft && syPos+enHeight[9] > ptop) {
+						g.setClip(sxPos, Math.max(syPos, ptop), enWidth[9], Math.min(enHeight[9], pbottom-syPos));
+						g.drawImage(enemyImages[9], sxPos-((2+i)*enWidth[9]), syPos, Graphics.TOP|Graphics.LEFT);
+					}
+				}
+			}
+			
+			int xPos = (fxPos-fenshift+128)>>8;
+			int yPos = ((fyPos+128)>>8)+ptop;
+			int xPos2 = (fxPos2-fenshift+128)>>8;
+			int yPos2 = ((fyPos2+128)>>8)+ptop;
+			
+			// rajta van-e a kepernyon
+			if (xPos2 <= pleft || xPos >= pright || yPos2 <= ptop || yPos >= pbottom) {
+				if (en.p != null) {
+					if (en.pathPoint == en.p.length) {	// elerte a path veget es kifutott a kepbol
+						enemies[i] = null;
+					}
+				} else {
+					if (yPos >= pbottom) {		// stat ellen elerte a kep aljat
+						enemies[i] = null;
+					}
+				}
+				continue;
+			}
+
+			// explosion-kirajzolas
+			if (en.explosionTime >= 0) {
+				if (en.type < 20) {
+                    g.setClip(xPos, Math.max(ptop, yPos), explSize, Math.min(explSize, pbottom-yPos));
+                    g.drawImage(explosionImages[enExpl[en.type]], xPos-((en.explosionTime>>5)*explSize), yPos, Graphics.TOP|Graphics.LEFT);
+                    continue;
+
+                } else {    // foellen
+                    if (meDestroyTime == null) {
+                        int len = 5;
+                        if (en.type == 22) len=8;
+                        meDestroyTime = new int[len];
+                        meDestroyX = new int[len];
+                        meDestroyY = new int[len];
+                        for (int j = 0; j < len; j++) meDestroyTime[j] = Integer.MAX_VALUE;
+                    }
+                    
+                    for (int j = 0; j < meDestroyTime.length; j++) {
+                        if (meDestroyTime[j] >= 192) {  // uj robbanas
+                            meDestroyTime[j] = 0;
+                            int r = random.nextInt();
+                            meDestroyX[j] = r%enWidth[en.type]-(explSize>>1);
+                            meDestroyY[j] = r%enHeight[en.type]-(explSize>>1);
+                        }
+
+                        g.setClip(xPos, Math.max(ptop, yPos), explSize, Math.min(explSize, pbottom-yPos));
+                        g.drawImage(explosionImages[j%3], xPos-(meDestroyTime[j]&0xffffe0), yPos, Graphics.TOP|Graphics.LEFT);
+                    }
+                    
+                    // 4 masodpercig az ellen is latszik, az 5. -ben mar csak a robbanasok
+                    if (en.explosionTime >= 1024) continue;
+                }
+			}
+
+			g.setClip(xPos, Math.max(ptop, yPos), enWidth[en.type], Math.min(enHeight[en.type], pbottom-yPos));
+			if (en.flashTime > 0) {
+				g.drawImage(enemyImages[en.type], xPos-enWidth[en.type], yPos, Graphics.TOP|Graphics.LEFT);
+				en.flashTime -= lastFrameTime;
+			} else if (en.ghostTime >= 0) {
+				g.drawImage(enemyImages[en.type], xPos-((2+(en.ghostTime>>5))*enWidth[10]), yPos, Graphics.TOP|Graphics.LEFT);
+			} else {
+				g.drawImage(enemyImages[en.type], xPos, yPos, Graphics.TOP|Graphics.LEFT);
+			}
+		}
+		
+		// utkozes - bullet vs. ship
+        if (shipDestroyTime < 0) {
+            for (int j = 0; j < bulletLast; j++) {
+                Bullet b = bullets[j];
+
+                if (b != null && b.enemy) {
+                    int fbulletLeft = b.fxAct;
+                    int fbulletRight = fbulletLeft + fBulletWidth[b.type];
+                    int fbulletTop = b.fyAct;
+                    int fbulletBottom = fbulletTop + fBulletHeight[b.type];
+
+                    if (collide(fShipLeft, fShipTop, fShipRight, fShipBottom, fbulletLeft, fbulletTop, fbulletRight, fbulletBottom)) {
+                        if (b.type >= 29 && b.type <= 33) {
+                            if (shipFrostTime < b.damage) shipFrostTime = b.damage;
+
+                        } else if (b.type == 38) {
+                            shipHP = 100;
+
+                        } else {
+                            //shipHP -= b.damage;
+                            if (shipHP < 0) {
+                                shipDestroyTime = 0;
+                                // explosion size korrigalas
+                                int dx = (shipWidth<<7)-(fExplSize>>1);
+                                int dy = (shipHeight<<7)-(fExplSize>>1);
+                                fShipX += dx;
+                                fShipY += dy;
+                            } else {
+                                createParticles((x1max+x2min)>>1, (y1max+y2min)>>1, b.damage);
+                            }
+                        }
+                        bullets[j] = null;	// shield
+                    }
+                }
+            }
+        } else {
+            if (shipDestroyTime >= 192) {
+                state = STATE_GAME_TOP_OUT; // player halal - todo
+                return;
+            } else {
+                shipDestroyTime += lastFrameTime;
+            }
+        }
+			
+		// bullet-kirakas - felso lovedekek
+		for (int i = 0; i < bulletLast; i++) {
+			Bullet b = bullets[i];
+			if (b != null && b.type == 39) {
+                drawBullet(g, i);
+			}
+		}
+
+        // particle-kirakas
+		g.setClip(0, ptop, scrX, pheight);
+		for (int i = 0; i < particlefTime.length; i++) {
+			if (particlefTime[i] > 0) {
+				g.setColor(255, 255, particlefTime[i]<<2);
+				g.fillRect((particlefXPos[i]-fenshift)>>8, particlefYPos[i]>>8, 1, 1);
+			}
+		}
+
+		// extragun
+		if (shipWeaponExtra >= 0) {
+			int extraGunX = (fExtraGunX-fenshift+128)>>8;
+			int extraGunY = (fExtraGunY>>8)+ptop;
+			g.setClip(0, ptop, scrX, pheight);
+			g.drawImage(bulletImages[15+shipWeaponExtra], extraGunX, extraGunY, Graphics.TOP|Graphics.LEFT);
+		}
+		
+		// ship-kirakas
+		int actShipX = ((fShipX-fenshift+128)>>8)+pleft;
+		int actShipY = ((fShipY+128)>>8)+ptop;
+
+        if (shipDestroyTime >= 0) {
+            if (shipDestroyTime < 192) {
+                g.setClip(actShipX, Math.max(ptop, actShipY), explSize, Math.min(explSize, pbottom-actShipY));
+                g.drawImage(explosionImages[0], actShipX-((shipDestroyTime>>5)*explSize), actShipY, Graphics.TOP|Graphics.LEFT);
+            }
+            
+        } else {
+            
+            if (shipBlinkingTime < 0 || (shipBlinkingTime & 32) == 32) {
+                g.setClip(actShipX, actShipY, shipWidth, shipHeight);
+                g.drawImage(shipImage, actShipX-(((shipSlideTime+16)>>5)*shipWidth), actShipY, Graphics.TOP|Graphics.LEFT);
+            }
+            if (shipBlinkingTime >= 0) shipBlinkingTime -= lastFrameTime;
+        }
+		
+		if (messageTime > 0) {
+			messageTime -= lastFrameTime;
+			if ((messageTime&64) == 0) writeStringCentered(g, scrX>>1, ptop+(pheight>>1)-fontHeight, messages[messageID]);
+		}
+	}
+
+	public static void writeNumRight(Graphics g, int x, int y, int num) {
+		do {
+			int digit = num%10;
+			num = num/10;
+			
+			x -= numberWidth[digit];
+			g.setClip(x, y, numberWidth[digit], numberHeight);
+			g.drawImage(numberImage, x-numberStart[digit], y, Graphics.TOP|Graphics.LEFT);
+		} while (num > 0);
+	}
+
+	public static void writeShop(Graphics g, int x, int y, int num) {
+		do {
+			int digit = num%10;
+			num = num/10;
+			
+			x -= shopNumberWidth[digit];
+			g.setClip(x, y, shopNumberWidth[digit], shopNumberHeight);
+			g.drawImage(shopNumberImage, x-shopNumberStart[digit], y, Graphics.TOP|Graphics.LEFT);
+		} while (num > 0);
+	}
+	
+	public static void writeNumLeft(Graphics g, int x, int y, int num) {
+		byte[] digits = new byte[10];
+		int p = -1;
+		do {
+			digits[++p] = (byte)(num%10);
+			num = num/10;
+		} while (num > 0);
+		
+		for (; p >= 0; p--) {
+			int digit = digits[p];
+			g.setClip(x, y, numberWidth[digit], numberHeight);
+			g.drawImage(numberImage, x-numberStart[digit], y, Graphics.TOP|Graphics.LEFT);
+			x += numberWidth[digit];
+		}
+	}
+	
+    public static int getCharIndex(char c) {
+        for (int i = 0; i < fontChar.length; i++) {
+            if (fontChar[i] == c) return i;
+        }
+        System.out.println("UNKNOWN CHAR AT GETCHARINDEX: "+c);
+        return -1;
+    }
+    
+    public static int getStringWidth(String s) {
+		int len = s.length();
+		int width = 0;
+		for (int i = 0; i < len; i++) {
+			int ind = getCharIndex(s.charAt(i));
+			width += fontWidth[ind]-1;
+		}
+        return width;
+    }
+    
+    public static int getNextLine(String s, int index, int swidth) {
+		int len = s.length();
+        int width = 0;
+        int lastWordEnd = index;
+        int ind = 0;
+        char ch = 0;
+        
+		for (int i = index; i < len; i++) {
+            ch = s.charAt(i);
+            if (ch == ' ') lastWordEnd = i;
+            
+			ind = getCharIndex(ch);
+			width += fontWidth[ind]-1;
+            if (width > swidth) return lastWordEnd;
+		}
+        // az egesz belefer egy sorba
+        return len;
+    }
+    
+	public static void writeStringLeft(Graphics g, int x, int y, String s) {
+		int len = s.length();
+		for (int i = 0; i < len; i++) {
+			int ind = getCharIndex(s.charAt(i));
+            int fwidth = fontWidth[ind];
+            if (fwidth+x >= 0 && x < scrX) {
+                g.setClip(x, y, fwidth, fontHeight);
+                g.drawImage(fontImage, x-fontStart[ind], y, Graphics.TOP|Graphics.LEFT);
+            }
+            x += fwidth-1;
+		}
+	}
+
+	public static void writeStringCentered(Graphics g, int x, int y, String s) {
+		writeStringLeft(g, x-(getStringWidth(s)>>1), y, s);
+	}
+	
+	public static void writeStringRight(Graphics g, int x, int y, String s) {
+		writeStringLeft(g, x-getStringWidth(s), y, s);
+	}
+	
+/**********************************************************************************
+/* EVENT
+/**********************************************************************************/
+	final class InputEvent {
+		public int start;
+		public int length = -1;
+		public int key;
+		public boolean repeated = false;
+	}
+
+	static InputEvent[] ehie = new InputEvent[16];  // ennyi ugyse lesz 
+	static int ehFirst = 0, ehLast = 0;
+
+	static public int ehSize() {
+		return ehLast-ehFirst;
+	}
+	
+	static public InputEvent ehNext() {
+		if (ehFirst == ehLast) return null;
+		InputEvent ret = ehie[ehFirst&0xf];
+		ehie[ehFirst&0xf] = null;	// DEBUG
+		ehFirst++;
+		return ret;
+	}
+	
+	static public void ehAdd(InputEvent e) {
+		if (ehLast >= 16 && ehFirst >= 16) {
+			ehLast &= 15; ehFirst &= 15;
+		}
+		ehie[ehLast&0xf] = e;
+		ehLast++;
+	}
+	
+	static public InputEvent ehSearch(int key) {
+		for (int i = ehFirst; i < ehLast; i++) {
+			int j = i & 0xf;
+			if (ehie[j].key == key && ehie[j].length < 0) return ehie[j];
+		}
+		return null;
+	}
+
+	public void keyPressed(int i) {
+		int time = (int)(System.currentTimeMillis()-levelStartTime);
+		int key = getGameAction(i);
+		switch (state) {
+			case STATE_GAME:
+                if (i == Canvas.KEY_POUND || i == Canvas.KEY_STAR) {
+                    state = STATE_GAME_TOP_OUT;
+                } else {
+                    synchronized(ehie) {	// todo: nem kell synch, ha callserially() van
+                        InputEvent nie = new InputEvent();
+                        nie.start = time;
+                        nie.key = key;
+                        ehAdd(nie);
+                    }
+                }
+				break;
+				
+			case STATE_MENU_UPGRADE:
+			case STATE_MENU:
+				moveMenu(key);
+				break;
+
+            case STATE_SCORES:
+                if (i == Canvas.KEY_POUND || i == Canvas.KEY_STAR) {
+                    state = STATE_SCORES_TO_MENU;
+                }
+                break;
+
+            case STATE_STORY:
+                if (i == Canvas.KEY_STAR && actStoryPage > 0) {
+                    prevStoryPage = actStoryPage;
+                    actStoryPage--;
+                    accMenuTime = 0;
+                }
+                if (i == Canvas.KEY_POUND) {
+                    if (actStoryPage < lastStoryPage) {
+                        prevStoryPage = actStoryPage;
+                        actStoryPage++;
+                    } else {    // kilepes
+                        state = STATE_STORY_TO_MENU;
+                    }
+                    accMenuTime = 0;
+                }
+                break;
+		}
+	}
+
+	public void keyRepeated(int i) {
+		if (state == STATE_MENU || state == STATE_MENU_UPGRADE) {
+			moveMenu(getGameAction(i));
+		}
+	}
+	
+	public void keyReleased(int i) {
+		if (state == STATE_GAME) {
+			int time = (int)(System.currentTimeMillis()-levelStartTime);
+			int key = getGameAction(i);
+			synchronized(ehie) {
+				InputEvent eie = ehSearch(key);
+				if (eie != null) eie.length = (int)(time-eie.start);
+			}
+		}
+	}
+
+
+/**********************************************************************************
+/* PATH
+/**********************************************************************************/
+final class Path {
+	public final int[] x, y, speed, wait, fDist, dx, dy;
+	public final int length;
+	
+	public Path(int numPoints) {
+		x = new int[numPoints];
+		y = new int[numPoints];
+		dx = new int[numPoints];
+		dy = new int[numPoints];
+		speed = new int[numPoints];
+		wait = new int[numPoints];
+		fDist = new int[numPoints];
+		length = numPoints-1;
+	}
+	
+	public void init() {
+		for (int i = 0; i < length; i++) {
+			dx[i] = x[i+1]-x[i];
+			dy[i] = y[i+1]-y[i];
+			
+			fDist[i] = Stuff.sqrt((dx[i]*dx[i]*65536) + (dy[i]*dy[i]*65536));	// tavolsag, 8bites fixpontban
+		}
+
+		// utvonal vegeztevel palyan marad
+		dx[length] = dx[length-1];
+		dy[length] = dy[length-1];
+		fDist[length] = fDist[length-1];
+	}
+}
+
+/**********************************************************************************
+/* ACTORS
+/**********************************************************************************/
+class EnemyType {
+	public int imageNum, speed, hp, point, bulletType, bulletFreq, bulletSpeed, bulletDamage;
+
+	public EnemyType(int _imageNum, int _speed, int _hp, int _point, int _bulletType, int _bulletFreq, int _bulletSpeed, int _bulletDamage) {
+		imageNum = _imageNum;
+		speed = _speed;
+		hp = _hp;
+		point = _point;
+		bulletType = _bulletType;
+		bulletFreq = _bulletFreq;
+		bulletSpeed = _bulletSpeed;
+		bulletDamage = _bulletDamage;
+	}
+}
+		
+final class Enemy {
+	public int bgPos, hp, type, dx, dy;
+    public int lastShot, bulletFreq;
+	final EnemyType entype;
+	final Path p;
+	public int pathPoint = -1;	// todo: def. erteke 0 legyen, a konstruktort ennek megfeleloen javitani
+	int fxPoint, fyPoint, fdAct, fwait;
+	public int fxAct, fyAct;
+	public int explosionTime = -1;
+	public int flashTime = 0;
+	public Enemy[] shadows;
+	public int fxGhost, fyGhost, ghostTime = -1;
+	public byte[] actorParams;
+	
+	public Enemy(int _type, int _bgPos, int _path, int _dx, int _dy, EnemyType _entype) {
+		type = _type;
+		entype = _entype;
+		bgPos = _bgPos;
+		dx = _dx;
+		dy = _dy;
+		hp = entype.hp;
+        if (entype.bulletType >= 16) {      // tud-e loni az ellen vagy sem
+            bulletFreq = entype.bulletFreq;
+        } else {
+            lastShot = -1;      // mert ha nem, 
+        }
+
+		if (_path < pathes.length) p = pathes[_path];
+		else p = null;
+
+		if (type == 9) {
+			shadows = new Enemy[2];
+			shadows[0] = new Enemy(59, bgPos, _path, dx, dy, entype);
+			shadows[1] = new Enemy(59, bgPos, _path, dx, dy, entype);
+		}
+	}
+	
+	public Enemy(int _type, int _bgPos, byte[] _actorParams) {
+		type = _type;
+		entype = null;
+		p = null;
+		bgPos = _bgPos;
+		actorParams = _actorParams;
+	}
+	
+	void activate() {
+		if (p == null) {					// stationary
+			fxAct = (bgLayers[bgLayers.length-1].getXPosFor(dx))<<8;
+			fyAct = (enbgpos - bgPos)<<8;
+			pathPoint = 0;
+			return;
+			
+		} else if (type == 10) {			// ghost - az 1. pontra ugrik be
+			fxAct = fyAct = fxPoint = fyPoint = -128*256;
+			ghostTime = 0;
+			fxGhost = dx + p.dx[0];
+			fyGhost = dy + p.dy[0];
+
+		} else {
+		
+			fxAct = fxPoint = dx;
+			fyAct = fyPoint = (((dy-enHeight[type])<<16)/pheight)>>8;	// hogy ne ugorjon be a kepbe semmilyen felbontas mellett sem
+		}
+
+		pathPoint = 0;
+		fwait = p.wait[0];
+		
+		if (type == 9) {
+			for (int i = 0; i < 2; i++) {
+				shadows[i].fxPoint = fxPoint;
+				shadows[i].fyPoint = fyPoint;
+				shadows[i].fxAct = fxAct;
+				shadows[i].fyAct = fyAct;
+				shadows[i].pathPoint = pathPoint;
+				shadows[i].fwait = 32<<i;
+			}
+		}
+		
+		int temp1 = bgPos - enHeight[type] - pheight - (fAccBGPos>>16);
+		//System.out.println("temp1: "+temp1+", enbgpos: "+enbgpos+", accfrtime: "+accFrameTime);
+
+		int temp2 = (int)(((long)temp1<<16)/fEnemyBGSpeed);
+		//System.out.println("temp2: "+temp2+", fEnemyBGSpeed: "+fEnemyBGSpeed);
+		
+		int time = accFrameTime - temp2;
+		//System.out.println("final time: "+time);
+		move(time);
+	}
+	
+	void move(int ft) {
+		if (p == null) {				// stationary
+			fyAct = (enbgpos - bgPos)<<8;
+			return;
+			
+		} else if (shadows != null) {	// fast enemy
+			shadows[0].move(ft);
+			shadows[1].move(ft);
+		} else if (ghostTime >= 0) {	// ghost-fade van
+			ghostTime += ft;
+			if (ghostTime >= 96) {		// fade vege
+				ft -= (ghostTime-96);
+				ghostTime = -1;
+				fdAct = 0;
+				fxPoint = fxGhost;
+				fyPoint = fyGhost;
+				fxAct = fxPoint*penwidth;
+				fyAct = fyPoint*pheight;
+				
+				if (pathPoint < p.length) {
+					pathPoint++;
+					fwait = p.wait[pathPoint];
+				} else {
+					return;		// and die...
+				}
+			}
+		}
+		
+		if (fwait > 0) {
+			if (fwait > ft) {
+				fwait -= ft;
+				return;
+			} else {
+				ft -= fwait;
+				fwait = 0;
+			}
+		}
+		
+		int fdAdv = (ft*entype.speed*p.speed[pathPoint])>>8;
+		int fdRem = p.fDist[pathPoint]-fdAct;
+
+		//System.out.println("fdAdv: "+fdAdv+", fdRem: "+fdRem);
+		while (fdAdv > fdRem) {
+			fdAdv -= fdRem;
+
+			fxPoint += p.dx[pathPoint];
+			fyPoint += p.dy[pathPoint];
+
+			if (pathPoint < p.length) {
+				pathPoint++;
+				fwait = p.wait[pathPoint];
+				if (fwait > 0) {
+					int fremft = (fdAdv<<8)/(entype.speed*p.speed[pathPoint]);
+					if (fremft > fwait) {
+						fremft -= fwait;
+						fwait = 0;
+						fdAdv = (fremft*entype.speed*p.speed[pathPoint])>>8;
+					} else {
+						fwait -= fremft;
+						fdAdv = 0;
+					}
+				}
+			}
+
+			fdAct = 0;
+			fdRem = p.fDist[pathPoint];
+		}
+
+		// itt mar vagy elert a path vegere, vagy elfogyott az advance
+		fdAct += fdAdv;
+		if (type == 10 && ghostTime < 0 && (fdRem>>2 < fdAct)) {		// ugras
+			//System.out.println("Dist done, ghosting");
+			ghostTime = 0;
+			if (pathPoint < p.length) {
+				fxGhost += p.dx[pathPoint];
+				fyGhost += p.dy[pathPoint];
+			} else {
+				fxGhost = fyGhost = -128*256;
+			}
+		}
+			
+		int fdRatio = (fdAct<<8)/p.fDist[pathPoint];
+		fxAct = (((fxPoint<<8) + (fdRatio*p.dx[pathPoint]))*penwidth)>>8;
+		fyAct = (((fyPoint<<8) + (fdRatio*p.dy[pathPoint]))*pheight)>>8;
+		//System.out.println(" >>> "+fxAct+", "+fyAct+horydebug);
+	}
+}	
+
+/**********************************************************************************
+/* LAYERS
+/**********************************************************************************/
+// TODO: bg hossz check (ha elerte a palya veget, ne dobja el magat!)
+interface Drawable {
+	void draw(Graphics g);
+	int getXPosFor(int xpos);
+	void setSpeed(int newSpeed);
+}
+
+final class CenteredLevelLayer implements Drawable {
+	final byte[] bg;
+    final int length;
+	public int speed;
+	int accBGPos = 0;
+	
+	public CenteredLevelLayer(byte[] _bg, int _speed) {
+		speed = _speed;
+		bg = _bg;
+        length = bg.length;
+	}
+	
+	public int getXPosFor(int xpos) {
+		return penmiddle-(96-xpos);
+	}
+
+	public void setSpeed(int newSpeed) {
+		accBGPos += accFrameTime*speed;
+		speed = newSpeed;
+	}
+
+	public void draw(Graphics g) {
+		// clip
+		g.setClip(pleft, ptop, pwidth, pheight);
+		
+		// bgpos ujrakalkulalasa
+		int bgPos = (int)(((accFrameTime*speed)+accBGPos)>>16);
+		
+		int bgPosMod = bgPos&0x1f;
+		int bgPosDiv = bgPos>>5;
+		int vscrleft = vscrl + (((vscrdelta*speed)+32768)>>16);
+        
+		// kirajzolas
+		int bgIndex = bgPosDiv*12;
+		for (int i = 1; i <= tileHeightToDraw; i++) {
+			int topPos = i<<5;
+            while (bgIndex >= length) bgIndex -= length;    // palya vegtelenites
+            
+			for (int j = 0; j < 12; j++) {
+				int actImIndex = bg[bgIndex++];
+				if (actImIndex < 0 || actImIndex >= bgImages.length) continue;
+				
+				// Y irany check
+				if (topPos-bgHeight[actImIndex] > pheight+bgPosMod) continue;
+
+				// X irany check
+				int leftPos = (j << 4)+vscrleft;
+				if (leftPos >= pright || bgWidth[actImIndex]+leftPos < pleft) continue;
+				
+				g.drawImage(bgImages[actImIndex], pleft+leftPos, pbottom + bgPosMod - topPos, Graphics.TOP|Graphics.LEFT);
+			}
+		}
+	}
+}
+
+final class RepeatedLevelLayer implements Drawable {
+	final byte[] bg;
+    final int length;
+	public int speed, tileWidthToDraw, startTile, endTile;
+	int accBGPos = 0;
+	
+	public RepeatedLevelLayer(byte[] _bg, int _speed) {
+		speed = _speed;
+		bg = _bg;
+        length = bg.length;
+
+		int actwidth = pwidth+((maxBGShift*((speed<<8)/fMaxBGSpeed))>>7);
+		tileWidthToDraw = actwidth>>4;
+		if ((pwidth&0xf) != 0) tileWidthToDraw++;
+			
+		startTile = 6-(tileWidthToDraw>>1);
+		endTile = 6+(tileWidthToDraw>>1);
+	}
+	
+	public int getXPosFor(int xpos) {
+		return penmiddle-(96-xpos);
+	}
+
+	public void setSpeed(int newSpeed) {
+		accBGPos += accFrameTime*speed;
+		speed = newSpeed;
+	}
+
+	public void draw(Graphics g) {
+		// clip
+		g.setClip(pleft, ptop, pwidth, pheight);
+		
+		// bgpos ujrakalkulalasa
+		int bgPos = (int)(((accFrameTime*speed)+accBGPos)>>16);
+		
+		int bgPosMod = bgPos&0x1f;
+		int bgPosDiv = bgPos>>5;
+		int vscrleft = vscrl + (((vscrdelta*speed)+32768)>>16);
+		
+        // kirajzolas
+		for (int i = 1; i <= tileHeightToDraw; i++) {
+			int bgIndex = (bgPosDiv+i-1)*12;
+            while (bgIndex >= length) bgIndex -= length;    // palya vegtelenites
+			int topPos = i<<5;
+
+			for (int j = -7; j < endTile; j++) {
+				int actInd = j;
+				while (actInd < 0) actInd += 6;
+				while (actInd >= 12) actInd -= 6;
+				int actImIndex = bg[bgIndex+actInd];
+				if (actImIndex < 0 || actImIndex >= bgImages.length) continue;
+
+				// Y irany check
+				if (topPos-bgHeight[actImIndex] > pheight+bgPosMod) continue;
+
+				// X irany check
+				int leftPos = (j << 4)+vscrleft;
+				if (leftPos >= pright || bgWidth[actImIndex]+leftPos < pleft) continue;
+
+				g.drawImage(bgImages[actImIndex], pleft+leftPos, pbottom + bgPosMod - topPos, Graphics.TOP|Graphics.LEFT);
+			}
+		}
+	}
+}
+
+final class JustifiedLevelLayer implements Drawable {
+	final byte[] bg;
+    final int length;
+	public int speed;
+	int maxShift, justCenterTile;
+	int accBGPos = 0;
+	
+	public JustifiedLevelLayer(byte[] _bg, int _speed) {
+		speed = _speed;
+		bg = _bg;
+        length = bg.length;
+	}
+
+	public void postInit() {
+		maxShift = ((maxBGShift*((speed<<8)/fMaxBGSpeed))+128)>>8;
+		
+		justCenterTile = (pwidth+maxShift)>>5;
+		if (((pwidth+maxShift)&0x1f) != 0) justCenterTile++;
+		if (justCenterTile > 6) justCenterTile = 6;
+	}
+	
+	public int getXPosFor(int xpos) {
+		if (xpos < penmiddle) {
+			return xpos;
+		} else if (xpos >= (192-penmiddle)) {
+			return penwidth-(192-xpos);
+		} else {
+			return -1;
+		}
+	}
+
+	public void setSpeed(int newSpeed) {
+		accBGPos += accFrameTime*speed;
+		speed = newSpeed;
+	}
+
+	public void draw(Graphics g) {
+		// bgpos ujrakalkulalasa
+		int bgPos = (int)(((accFrameTime*speed)+accBGPos)>>16);
+		
+		int bgPosMod = bgPos&0x1f;
+		int bgPosDiv = bgPos>>5;
+		int vscrleft = (((vscrdelta*speed)+32768)>>16);
+
+        // kirajzolas
+		// bal oldal
+		g.setClip(pleft, ptop, pwidth>>1, pheight);
+		for (int i = 1; i <= tileHeightToDraw; i++) {
+			int bgIndex = (bgPosDiv+i-1)*12;
+            while (bgIndex >= length) bgIndex -= length;    // palya vegtelenites
+			int topPos = i<<5;
+
+			for (int j = 0; j < justCenterTile; j++) {
+				int actImIndex = bg[bgIndex++];
+				if (actImIndex < 0 || actImIndex >= bgImages.length) continue;
+
+				// Y irany check
+				if (topPos-bgHeight[actImIndex] > pheight+bgPosMod) continue;
+
+				int leftPos = (j<<4)-maxShift+vscrleft;
+
+				g.drawImage(bgImages[actImIndex], pleft+leftPos, pbottom + bgPosMod - topPos, Graphics.TOP|Graphics.LEFT);
+			}
+		}
+
+		//jobb oldal
+		g.setClip(pwidth>>1, ptop, pwidth>>1, pheight);
+		for (int i = 1; i <= tileHeightToDraw; i++) {
+			int bgIndex = (bgPosDiv+i-1)*12+6;
+            while (bgIndex >= length) bgIndex -= length;    // palya vegtelenites
+			int topPos = i<<5;
+
+			for (int j = 6; j < 12; j++) {
+				int actImIndex = bg[bgIndex++];
+				if (actImIndex < 0 || actImIndex >= bgImages.length) continue;
+
+				// X irany check
+				int leftPos = pwidth+maxShift+vscrleft - ((12-j)<<4);
+				if (leftPos >= pright || bgWidth[actImIndex]+leftPos < pleft+(pwidth>>2)) continue;
+
+				// Y irany check
+				if (topPos-bgHeight[actImIndex] > pheight+bgPosMod) continue;
+
+				g.drawImage(bgImages[actImIndex], pleft+leftPos, pbottom + bgPosMod - topPos, Graphics.TOP|Graphics.LEFT);
+			}
+		}
+	}
+}
+}
+
+final class Bullet {
+	public boolean enemy;
+	public int fxAct, fyAct, angle, speed, type, actFrame, accFrameTime, fdx, fdy, fd, damage;
+    public int fPhase = -1;
+	final int actblfrnum;
+	
+	public Bullet(boolean _enemy, int _fxAct, int _fyAct, int _angle, int _speed, int _type, int _damage) {
+		enemy = _enemy;
+		fxAct = _fxAct;
+		fyAct = _fyAct;
+		speed = _speed;
+		angle = _angle;
+		type = _type;
+		damage = _damage;
+
+		actblfrnum = MyCanvas.bulletFrameNum[type];
+		fxAct -= (MyCanvas.fBulletWidth[type]>>1);
+		//fyAct -= (MyCanvas.fbulletHeight[type]>>1);	// nem kell, mert alapbol lejjebbrol kell inditani a lovedekeket - kb. pont ennyivel
+	}
+	
+	void move(int ft) {
+		// lovedek frame
+		if (actblfrnum > 1) {
+			accFrameTime += ft;
+			actFrame += accFrameTime>>5;
+			accFrameTime &= 0x1f;
+			while (actFrame >= actblfrnum) actFrame -= actblfrnum;
+		}
+        
+        // raketa
+        if (fPhase >= 0) {
+            int oldph = Stuff.sin(fPhase>>8);
+            fPhase += ft*180;   // masodperces hullamhossz
+            while (fPhase >= (180<<8)) fPhase -= 180<<8;
+            int actph = Stuff.sin(fPhase>>8);
+            fxAct += ((actph-oldph)*12)>>8;
+            fyAct += ft*speed;
+            return;
+        }
+		
+		// mozgas
+		if (speed == 0) return;
+		int d = ft*speed;
+		
+		if (angle >= 0) {
+			fxAct += (Stuff.cos(angle)*d)>>16;
+			fyAct -= (Stuff.sin(angle)*d)>>16;
+		} else {
+			while (d > fd) {
+				fxAct += fdx;
+				fyAct += fdy;
+				d -= fd;
+			}
+
+			int ratio = (d<<8)/fd;
+			fxAct += (ratio*fdx)>>8;
+			fyAct += (ratio*fdy)>>8;
+		}
+	}
+	
+	void seek(int mindx, int mindy, int mind, int ft) {
+		angle = -1;
+		fdx = mindx;
+		fdy = mindy;
+		fd = mind;
+
+		int actd = ft*speed;
+		if (actd >= mind) {
+			fxAct += mindx;
+			fyAct += mindy;
+		} else {
+			int ratio = (actd<<8)/mind;
+			fxAct += (ratio*mindx)>>8;
+			fyAct += (ratio*mindy)>>8;
+		}
+	}
+}
+
+// TODO: pause & stop-ot implementalni
+public class MyMIDlet extends MIDlet {
+	MyCanvas canvas;
+
+	public MyMIDlet() {
+	}
+		
+	public void startApp() {
+		try {
+			canvas = new MyCanvas();
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		canvas.myDisplay = Display.getDisplay(this);
+		canvas.myMIDlet = this;
+		canvas.myDisplay.setCurrent(canvas);
+
+		canvas.init();
+	}
+	
+	public void pauseApp() {
+	}
+	
+	public void destroyApp(boolean unconditional) {
+	}
+}
